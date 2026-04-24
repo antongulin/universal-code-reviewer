@@ -17,7 +17,7 @@ Universal Code Reviewer sends pull request diffs to the LLM endpoint configured 
 Recommended workflow practices:
 
 - Use GitHub Secrets for API keys.
-- Keep workflow permissions minimal: `contents: read`, `pull-requests: write`, and `issues: write`.
+- Keep workflow permissions minimal: `contents: read` and `pull-requests: write`.
 - Avoid `pull_request_target`; this action intentionally skips that event.
 - Keep slash commands maintainer-only with `min-command-permission: "write"` unless you understand the cost and privacy tradeoffs.
 - Prefer self-hosted runners and private model endpoints for sensitive codebases.

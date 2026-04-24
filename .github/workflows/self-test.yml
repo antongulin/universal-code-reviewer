@@ -9,7 +9,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   test:
@@ -53,9 +52,9 @@ jobs:
   command-test:
     if: |
       github.event_name == 'issue_comment' && github.event.issue.pull_request && (
-        contains(github.event.comment.body, '/review') ||
-        contains(github.event.comment.body, '/summary') ||
-        contains(github.event.comment.body, '/help')
+        startsWith(github.event.comment.body, '/review') ||
+        startsWith(github.event.comment.body, '/summary') ||
+        startsWith(github.event.comment.body, '/help')
       )
     runs-on: ubuntu-latest
     env:
