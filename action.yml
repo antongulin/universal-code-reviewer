@@ -1,5 +1,5 @@
 name: "Universal Code Reviewer"
-description: "AI-powered code reviews using any OpenAI-compatible LLM. Supports PR auto-review and @mention triggers with no usage quotas."
+description: "AI-powered code reviews using any OpenAI-compatible LLM. Supports PR auto-review and @mention triggers with no action-level quotas."
 author: "antongulin"
 branding:
   icon: "eye"
@@ -19,7 +19,7 @@ inputs:
     required: false
     default: ""
   llm-base-url:
-    description: "Base URL for OpenAI-compatible API. Examples: https://api.openai.com/v1, http://localhost:11434/v1"
+    description: "Base URL for OpenAI-compatible API. Examples: https://api.openai.com/v1, http://your-server:11434/v1"
     required: true
   base-url:
     description: "Alias for llm-base-url"

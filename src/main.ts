@@ -28,7 +28,7 @@ async function run(): Promise<void> {
     const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
     const model = core.getInput("model", { required: true });
     const triggerOnMention = core.getInput("trigger-on-mention") === "true";
-    const failOnCritical = core.getInput("fail-on-critical") === "false";
+    const failOnCritical = core.getInput("fail-on-critical") === "true";
     const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
 
     core.info(`Event: ${eventName}`);
@@ -54,7 +54,7 @@ async function run(): Promise<void> {
       } else if (commentBody.includes("/summary")) {
         command = "summary";
         shouldRun = true;
-      } else if (commentBody.includes("@code-reviewer")) {
+      } else if (triggerOnMention && commentBody.includes("@code-reviewer")) {
         // Legacy @mention falls back to full review
         command = "review";
         shouldRun = true;

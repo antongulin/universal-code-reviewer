@@ -1,6 +1,895 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 8529:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GitUtils = void 0;
+const child_process_1 = __nccwpck_require__(5317);
+class GitUtils {
+    octokit;
+    token;
+    constructor(octokit, token) {
+        this.octokit = octokit;
+        this.token = token;
+    }
+    async getPullRequestDiff(owner, repo, pullNumber) {
+        try {
+            // Use GitHub API to get diff
+            const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, {
+                headers: {
+                    Authorization: `Bearer ${this.token}`,
+                    Accept: "application/vnd.github.v3.diff",
+                },
+            });
+            if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+            }
+            const diff = await response.text();
+            return diff;
+        }
+        catch (error) {
+            // Fallback: use git command if available
+            try {
+                const baseRef = await this.getBaseRef(owner, repo, pullNumber);
+                const headRef = await this.getHeadRef(owner, repo, pullNumber);
+                if (baseRef && headRef) {
+                    (0, child_process_1.execSync)(`git fetch origin ${baseRef} ${headRef}`, { stdio: "pipe" });
+                    const diff = (0, child_process_1.execSync)(`git diff ${baseRef}...${headRef}`, { encoding: "utf-8" });
+                    return diff;
+                }
+            }
+            catch {
+                // ignore fallback errors
+            }
+            throw error;
+        }
+    }
+    async getBaseRef(owner, repo, pullNumber) {
+        try {
+            const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+            return data.base.ref;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    async getHeadRef(owner, repo, pullNumber) {
+        try {
+            const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+            return data.head.ref;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    async getFileContent(owner, repo, path, ref) {
+        try {
+            const { data } = await this.octokit.rest.repos.getContent({
+                owner,
+                repo,
+                path,
+                ref,
+            });
+            if ("content" in data) {
+                return Buffer.from(data.content, "base64").toString("utf-8");
+            }
+            return "";
+        }
+        catch {
+            return "";
+        }
+    }
+}
+exports.GitUtils = GitUtils;
+//# sourceMappingURL=git-utils.js.map
+
+/***/ }),
+
+/***/ 268:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GitHubReviewer = void 0;
+const core = __importStar(__nccwpck_require__(7484));
+class GitHubReviewer {
+    octokit;
+    constructor(octokit) {
+        this.octokit = octokit;
+    }
+    async postReview(owner, repo, pullNumber, findings) {
+        try {
+            core.info("Posting review to PR #" + pullNumber + "...");
+            // Fetch file patches to map line positions
+            const { data: files } = await this.octokit.rest.pulls.listFiles({
+                owner,
+                repo,
+                pull_number: pullNumber,
+            });
+            // Build line-level comments from findings
+            const comments = this.buildReviewComments(findings, files);
+            // Build the review summary body (high-level)
+            const body = this.buildReviewBody(findings);
+            // Determine review event type
+            const event = findings.critical.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
+            const { data: review } = await this.octokit.rest.pulls.createReview({
+                owner,
+                repo,
+                pull_number: pullNumber,
+                body,
+                event,
+                comments,
+            });
+            core.info("Posted review #" + review.id + " with " + comments.length + " individual line comments");
+        }
+        catch (error) {
+            core.error("Failed to post review: " + error);
+            throw error;
+        }
+    }
+    /**
+     * Build separate line-level comments for each finding that can be mapped to a line.
+     * Each comment appears as an individual thread the repo owner can reply to and resolve.
+     */
+    buildReviewComments(findings, files) {
+        const comments = [];
+        // Combine all findings
+        const allFindings = [
+            ...findings.critical,
+            ...findings.important,
+            ...findings.suggestions,
+        ];
+        for (const finding of allFindings) {
+            // Need both file and line to post a line comment
+            if (!finding.file || !finding.line)
+                continue;
+            const diffFile = files.find((f) => f.filename === finding.file);
+            if (!diffFile) {
+                core.warning("Could not find diff for file: " + finding.file);
+                continue;
+            }
+            const position = this.mapLineToPosition(diffFile.patch || "", finding.line);
+            if (!position) {
+                core.warning("Could not map line " + finding.line + " to diff position for file: " + finding.file);
+                continue;
+            }
+            let commentBody = this.formatCommentBody(finding);
+            comments.push({
+                path: finding.file,
+                position,
+                body: commentBody,
+            });
+        }
+        return comments;
+    }
+    formatCommentBody(finding) {
+        const severityEmoji = finding.severity === "critical"
+            ? ":x: CRITICAL"
+            : finding.severity === "important"
+                ? ":warning: IMPORTANT"
+                : ":bulb: SUGGESTION";
+        let body = severityEmoji + "\n\n" + finding.description;
+        if (finding.recommendation) {
+            body += "\n\n**Recommendation:** " + finding.recommendation;
+        }
+        if (finding.codeSnippet) {
+            body += "\n\n```\n" + finding.codeSnippet + "\n```";
+        }
+        return body;
+    }
+    /**
+     * Build a concise summary body. Findings are shown here ONLY if they
+     * could not be mapped to individual line comments.
+     */
+    buildReviewBody(findings) {
+        const parts = [];
+        parts.push("## :robot: Code Review");
+        parts.push("");
+        // Stats summary
+        const statBlocks = [];
+        if (findings.critical.length > 0) {
+            statBlocks.push(":x: **" + findings.critical.length + " Critical**");
+        }
+        if (findings.important.length > 0) {
+            statBlocks.push(":warning: **" + findings.important.length + " Important**");
+        }
+        if (findings.suggestions.length > 0) {
+            statBlocks.push(":bulb: **" + findings.suggestions.length + " Suggestions**");
+        }
+        if (statBlocks.length === 0) {
+            statBlocks.push(":white_check_mark: **No issues found**");
+        }
+        parts.push(statBlocks.join(" | "));
+        // Overall summary from the model
+        if (findings.summary) {
+            parts.push("");
+            parts.push("### Summary");
+            parts.push(findings.summary);
+        }
+        // Add any "orphan" findings that could not be mapped to lines
+        const orphanFindings = [
+            ...findings.critical,
+            ...findings.important,
+            ...findings.suggestions,
+        ].filter((f) => !f.file || !f.line);
+        if (orphanFindings.length > 0) {
+            parts.push("");
+            parts.push("---");
+            parts.push("### :page_facing_up: General Findings (not linked to specific lines)");
+            for (let i = 0; i < orphanFindings.length; i++) {
+                parts.push("");
+                parts.push(this.formatOrphanFinding(i + 1, orphanFindings[i]));
+            }
+        }
+        parts.push("");
+        parts.push("---");
+        parts.push("*Reviews powered by [Universal Code Reviewer](https://github.com/antongulin/universal-code-reviewer)*");
+        return parts.join("\n");
+    }
+    formatOrphanFinding(index, finding) {
+        const location = finding.file ? " (`" + finding.file + "`)" : "";
+        let result = finding.severity === "critical"
+            ? ":x:"
+            : finding.severity === "important"
+                ? ":warning:"
+                : ":bulb:";
+        result += " **" + index + location + "** — " + finding.description;
+        if (finding.recommendation) {
+            result += "\n> " + finding.recommendation;
+        }
+        return result;
+    }
+    /**
+     * Map a file line number to the diff position GitHub expects.
+     * Position is the 1-based index from the first @@ hunk header.
+     */
+    mapLineToPosition(patch, targetLine) {
+        if (!patch)
+            return null;
+        let position = 0;
+        let currentLine = 0;
+        let inHunk = false;
+        for (const line of patch.split("\n")) {
+            // Hunk header: parse the starting line number in the NEW file
+            if (line.startsWith("@@")) {
+                const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+                if (match) {
+                    // +N is the first line of this hunk in the new file
+                    currentLine = parseInt(match[1], 10);
+                }
+                inHunk = true;
+                position++; // @@ line counts toward position in GitHub's diff
+                continue;
+            }
+            if (!inHunk) {
+                // Lines before the first hunk (shouldn't happen in patch)
+                continue;
+            }
+            // "\ No newline at end of file" marker doesn't count
+            if (line.startsWith("\\")) {
+                position++;
+                continue;
+            }
+            position++;
+            if (line.startsWith("+")) {
+                // Added line exists in the new file
+                if (currentLine === targetLine) {
+                    return position;
+                }
+                currentLine++;
+            }
+            else if (line.startsWith("-")) {
+                // Removed line — does not exist in new file, keep position but don't count line
+            }
+            else {
+                // Context line — exists in both old and new file
+                if (currentLine === targetLine) {
+                    return position;
+                }
+                currentLine++;
+            }
+        }
+        return null;
+    }
+}
+exports.GitHubReviewer = GitHubReviewer;
+//# sourceMappingURL=github-reviewer.js.map
+
+/***/ }),
+
+/***/ 3316:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.LLMClient = void 0;
+const openai_1 = __nccwpck_require__(2583);
+const core = __importStar(__nccwpck_require__(7484));
+class LLMClient {
+    client;
+    model;
+    constructor(baseUrl, apiKey, model) {
+        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
+        this.client = new openai_1.OpenAI({
+            baseURL: baseUrl,
+            apiKey: apiKey || "ollama",
+            maxRetries: 3,
+            timeout: 120000, // 2 minutes for large diffs
+        });
+        this.model = model;
+    }
+    async chatCompletion(systemPrompt, userContent) {
+        try {
+            const response = await this.client.chat.completions.create({
+                model: this.model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userContent },
+                ],
+                temperature: 0.1,
+                max_tokens: 8192,
+            });
+            const content = response.choices[0]?.message?.content || "";
+            if (!content) {
+                throw new Error("Empty response from LLM");
+            }
+            return content;
+        }
+        catch (error) {
+            core.error(`LLM API error: ${error}`);
+            throw new Error(`Failed to get response from LLM: ${error}`);
+        }
+    }
+}
+exports.LLMClient = LLMClient;
+//# sourceMappingURL=llm-client.js.map
+
+/***/ }),
+
+/***/ 7160:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const core = __importStar(__nccwpck_require__(7484));
+const github = __importStar(__nccwpck_require__(3228));
+const llm_client_1 = __nccwpck_require__(3316);
+const git_utils_1 = __nccwpck_require__(8529);
+const review_parser_1 = __nccwpck_require__(2141);
+const github_reviewer_1 = __nccwpck_require__(268);
+const review_prompts_1 = __nccwpck_require__(319);
+const AVAILABLE_COMMANDS = [
+    { command: "/review", description: "Posts a full code review of the pull request" },
+    { command: "/summary", description: "Posts a summary of the changes in the pull request" },
+    { command: "/help", description: "Shows available commands" },
+];
+async function run() {
+    try {
+        const eventName = github.context.eventName;
+        const payload = github.context.payload;
+        const token = core.getInput("github-token", { required: true });
+        const octokit = github.getOctokit(token);
+        const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
+        const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
+        const model = core.getInput("model", { required: true });
+        const triggerOnMention = core.getInput("trigger-on-mention") === "true";
+        const failOnCritical = core.getInput("fail-on-critical") === "true";
+        const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
+        core.info(`Event: ${eventName}`);
+        core.info(`Model: ${model}`);
+        let shouldRun = false;
+        let prNumber;
+        let command = "review"; // default command for PR events
+        if (eventName === "pull_request" || eventName === "pull_request_target") {
+            shouldRun = true;
+            prNumber = payload.pull_request?.number;
+        }
+        else if (eventName === "issue_comment") {
+            const commentBody = payload.comment?.body || "";
+            // Detect slash commands
+            if (commentBody.includes("/help")) {
+                await postHelpComment(octokit, payload);
+                return;
+            }
+            else if (commentBody.includes("/review")) {
+                command = "review";
+                shouldRun = true;
+            }
+            else if (commentBody.includes("/summary")) {
+                command = "summary";
+                shouldRun = true;
+            }
+            else if (triggerOnMention && commentBody.includes("@code-reviewer")) {
+                // Legacy @mention falls back to full review
+                command = "review";
+                shouldRun = true;
+            }
+            if (shouldRun) {
+                prNumber = payload.issue?.number;
+            }
+        }
+        if (!shouldRun || !prNumber) {
+            core.info("No matching trigger found. Skipping.");
+            return;
+        }
+        const owner = github.context.repo.owner;
+        const repo = github.context.repo.repo;
+        core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
+        const gitUtils = new git_utils_1.GitUtils(octokit, token);
+        const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
+        if (!diff || diff.trim().length === 0) {
+            core.warning("No diff found for this PR.");
+            return;
+        }
+        const truncatedDiff = diff.length > maxDiffSize
+            ? diff.slice(0, maxDiffSize) + "\n\n[... Diff truncated due to size limit]"
+            : diff;
+        core.info(`Diff size: ${diff.length} chars${diff.length > maxDiffSize ? " (truncated)" : ""}`);
+        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model);
+        let reviewText;
+        if (command === "summary") {
+            reviewText = await runSummary(llm, truncatedDiff);
+        }
+        else {
+            reviewText = await runReview(llm, truncatedDiff);
+        }
+        if (command === "summary") {
+            // Post summary as a regular comment
+            await octokit.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: reviewText,
+            });
+        }
+        else {
+            // Full review parsed and posted as a review
+            core.info("Parsing review response...");
+            const findings = review_parser_1.ReviewParser.parse(reviewText);
+            core.info(`Found ${findings.critical.length} critical, ${findings.important.length} important, ${findings.suggestions.length} suggestions`);
+            const reviewer = new github_reviewer_1.GitHubReviewer(octokit);
+            await reviewer.postReview(owner, repo, prNumber, findings);
+            if (findings.critical.length > 0 && failOnCritical) {
+                core.setFailed(`Found ${findings.critical.length} critical issue(s). Failing check.`);
+            }
+        }
+        core.info("Done.");
+    }
+    catch (error) {
+        core.setFailed(error instanceof Error ? error.message : String(error));
+    }
+}
+async function postHelpComment(octokit, payload) {
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
+    const issueNumber = payload.issue?.number;
+    if (!issueNumber)
+        return;
+    const helpBody = (0, review_prompts_1.getHelpMessage)();
+    await octokit.rest.issues.createComment({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body: helpBody,
+    });
+    core.info("Posted help comment.");
+}
+async function runReview(llm, diff) {
+    const systemPrompt = (0, review_prompts_1.getReviewPrompt)();
+    const userContent = buildReviewInput(diff);
+    core.info("Getting full code review...");
+    return await llm.chatCompletion(systemPrompt, userContent);
+}
+async function runSummary(llm, diff) {
+    const systemPrompt = (0, review_prompts_1.getSummaryPrompt)();
+    const userContent = buildSummaryInput(diff);
+    core.info("Getting PR summary...");
+    return await llm.chatCompletion(systemPrompt, userContent);
+}
+function buildReviewInput(diff) {
+    return [
+        "Please review the following code diff and provide structured feedback.",
+        "Format your response with these sections:",
+        "## Critical Issues (must fix)",
+        "## Important Issues (should fix)",
+        "## Suggestions (nice to have)",
+        "## Summary",
+        "---",
+        "CODE DIFF:",
+        "```diff",
+        diff,
+        "```",
+    ].join("\n");
+}
+function buildSummaryInput(diff) {
+    return [
+        "Summarize the following pull request diff. Provide:",
+        "1. High-level overview of what changed",
+        "2. Key files affected",
+        "3. Any notable patterns or patterns that could be improved",
+        "Be concise but informative.",
+        "---",
+        "CODE DIFF:",
+        "```diff",
+        diff,
+        "```",
+    ].join("\n");
+}
+run();
+//# sourceMappingURL=main.js.map
+
+/***/ }),
+
+/***/ 319:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getReviewPrompt = getReviewPrompt;
+exports.getSummaryPrompt = getSummaryPrompt;
+exports.getHelpMessage = getHelpMessage;
+function getReviewPrompt() {
+    return [
+        "You are a Senior Code Reviewer with deep expertise in software architecture, design patterns, and best practices.",
+        "",
+        "Analyze the provided code diff for:",
+        "",
+        "1. Plan Alignment -- Does the implementation match stated goals?",
+        "2. Code Quality -- Patterns, conventions, error handling, type safety",
+        "3. Architecture -- SOLID principles, separation of concerns, scalability",
+        "4. Security -- Input validation, auth flaws, data exposure, dependency vulnerabilities",
+        "5. Documentation -- Comments, file headers, coding standards",
+        "6. Maintainability -- Naming, test coverage, code organization",
+        "",
+        "Output Format (STRICT):",
+        "",
+        "### Summary",
+        "Concise overall assessment (2-4 sentences).",
+        "",
+        "### Critical Issues (must fix)",
+        "For each finding, use this exact format (file and line REQUIRED):",
+        "- src/auth.ts:42 -- Missing input validation on userId parameter. SQL injection risk. Add parameterized query.",
+        "- src/utils.js:15 -- Hardcoded API key exposed.",
+        "",
+        "### Important Issues (should fix)",
+        "- src/handlers.ts:88 -- No error handling for network timeout. Retry with exponential backoff.",
+        "- src/handlers.ts:102 -- Magic number used. Extract to named constant.",
+        "",
+        "### Suggestions (nice to have)",
+        "Refactors, style improvements, architecture enhancements -- non-blocking.",
+        "",
+        "Severity Rules:",
+        "- Critical: Security vulnerability, production crash, data loss, missing auth, broken core function",
+        "- Important: Performance issue, missing error handling, logic flaw, significant code smell",
+        "- Suggestion: Naming, style, minor refactor, documentation gap, test coverage",
+        "",
+        "Guidelines:",
+        "- CRITICAL FORMAT RULE: Each finding MUST start with its exact file and line number in this format: file.ext:123 -- description here. This enables posting as a separate comment thread on that line.",
+        "- Your output will be parsed into individual comments. One bullet = one line-level comment.",
+        "- Always acknowledge what was done well before highlighting issues.",
+        "- Be thorough but concise. Every item should be actionable and specific to the diff.",
+        "- Propose concrete code examples when helpful.",
+        "- If no issues in a tier, write None rather than omitting.",
+        "- Do not hallucinate issues. Only flag problems actually visible in the diff.",
+    ].join("\n");
+}
+function getSummaryPrompt() {
+    return [
+        "You are a technical summarizer. Provide a concise, high-level overview of a pull request diff.",
+        "",
+        "Structure your response as:",
+        "",
+        "### What Changed",
+        "2-3 sentences describing the overall purpose and scope of the changes.",
+        "",
+        "### Key Files",
+        "List the most important files modified and a one-line description of what changed in each.",
+        "",
+        "### Notable Patterns",
+        "- Any design patterns used (or missed opportunities)",
+        "- Any architectural shifts",
+        "- Any potential concerns worth flagging (but not a full review)",
+        "",
+        "Guidelines:",
+        "- Be concise. Aim for a 60-second read.",
+        "- Mention both additions and removals.",
+        "- Do not suggest code fixes -- this is summary only.",
+    ].join("\n");
+}
+function getHelpMessage() {
+    return [
+        "Available commands for **Universal Code Reviewer**:",
+        "",
+        "| Command | Description |",
+        "|---|---|",
+        "| /review | Full code review with severity tiers (Critical / Important / Suggestion) |",
+        "| /summary | Concise PR overview -- what changed, key files, notable patterns |",
+        "| /help | Show this message |",
+        "",
+        "You can also use:",
+        "| Trigger | Description |",
+        "|---|---|",
+        "| @code-reviewer | Alias for /review |",
+        "| Auto on PR | Every new PR gets a review automatically |",
+        "",
+        "This action uses your own LLM endpoint -- no usage quotas, no vendor lock-in.",
+    ].join("\n");
+}
+//# sourceMappingURL=review-prompts.js.map
+
+/***/ }),
+
+/***/ 2141:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ReviewParser = void 0;
+const core = __importStar(__nccwpck_require__(7484));
+class ReviewParser {
+    static parse(rawText) {
+        const review = {
+            summary: "",
+            critical: [],
+            important: [],
+            suggestions: [],
+            rawResponse: rawText,
+        };
+        try {
+            const summaryMatch = rawText.match(/##\s*Summary[\s\S]*?(?=##\s*(Critical|Important|Suggestion|$))/i);
+            if (summaryMatch) {
+                review.summary = summaryMatch[0].replace(/##\s*Summary\s*/i, "").trim();
+            }
+            const criticalSection = this.extractSection(rawText, "Critical");
+            const importantSection = this.extractSection(rawText, "Important");
+            const suggestionSection = this.extractSection(rawText, "Suggestion");
+            review.critical = this.parseFindings(criticalSection, "critical");
+            review.important = this.parseFindings(importantSection, "important");
+            review.suggestions = this.parseFindings(suggestionSection, "suggestion");
+            core.info(`Parsed: ${review.critical.length} critical, ${review.important.length} important, ${review.suggestions.length} suggestions`);
+        }
+        catch (error) {
+            core.warning(`Failed to parse structured review: ${error}. Treating entire response as raw summary.`);
+            review.summary = rawText;
+        }
+        return review;
+    }
+    static extractSection(text, sectionName) {
+        const regex = new RegExp(`##\\s*${sectionName}[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=##\\s*(?:Critical|Important|Suggestion|Summary|$))`, "i");
+        const match = text.match(regex);
+        return match ? match[1].trim() : "";
+    }
+    static parseFindings(section, severity) {
+        if (!section)
+            return [];
+        const lines = section.split("\n");
+        const findings = [];
+        let currentFinding = null;
+        let descriptionLines = [];
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed)
+                continue;
+            const isNewItem = /^[-*•·]\d*\./.test(trimmed) || /^\d+\./.test(trimmed);
+            if (isNewItem) {
+                if (currentFinding) {
+                    currentFinding.description = descriptionLines.join("\n").trim();
+                    if (currentFinding.description) {
+                        findings.push(currentFinding);
+                    }
+                }
+                const fileLine = this.extractFileAndLine(trimmed);
+                currentFinding = {
+                    severity: severity,
+                    category: "",
+                    description: "",
+                    recommendation: "",
+                    file: fileLine.file,
+                    line: fileLine.line,
+                };
+                // Use cleaned text (without file:line prefix) as first description line
+                descriptionLines = [fileLine.cleanedText];
+            }
+            else if (trimmed.startsWith("  ") || trimmed.startsWith("\t")) {
+                if (this.looksLikeCode(trimmed)) {
+                    if (currentFinding) {
+                        currentFinding.codeSnippet = (currentFinding.codeSnippet || "") + trimmed + "\n";
+                    }
+                }
+                else {
+                    descriptionLines.push(trimmed);
+                }
+            }
+            else {
+                descriptionLines.push(trimmed);
+            }
+        }
+        if (currentFinding) {
+            currentFinding.description = descriptionLines.join("\n").trim();
+            if (currentFinding.description) {
+                findings.push(currentFinding);
+            }
+        }
+        return findings;
+    }
+    static looksLikeCode(text) {
+        const codeIndicators = [
+            /^\s*(def|class|function|const|let|var|import|export|if|for|while|return)/,
+            /^\s*[/].*[/]/,
+            /^\s*[`"']/,
+            /^\s*[{\[(]/,
+        ];
+        return codeIndicators.some((pattern) => pattern.test(text));
+    }
+    static extractFileAndLine(text) {
+        // Match pattern like `src/auth.ts:42 — description` or `src/auth.ts:42 - description`
+        const fullPattern = /^[`']?([^`\s]+\.(?:[a-zA-Z0-9]+))\s*:\s*(\d+)\s*[\-\u2013\u2014]\s*(.+)$/i;
+        const match = text.match(fullPattern);
+        if (match) {
+            return {
+                file: match[1],
+                line: parseInt(match[2], 10),
+                cleanedText: match[3].trim(),
+            };
+        }
+        // Fallback: try to find file and line anywhere in the text
+        const filePattern = /[`']?([^`\s]+\.(?:[a-zA-Z0-9]+))[`']?/i;
+        const linePattern = /:(\d+)/i;
+        const fileMatch = text.match(filePattern);
+        const lineMatch = text.match(linePattern);
+        return {
+            file: fileMatch ? fileMatch[1] : undefined,
+            line: lineMatch ? parseInt(lineMatch[1], 10) : undefined,
+            cleanedText: text,
+        };
+    }
+}
+exports.ReviewParser = ReviewParser;
+//# sourceMappingURL=review-parser.js.map
+
+/***/ }),
+
 /***/ 4914:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -35638,895 +36527,6 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
-/***/ 9807:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.GitUtils = void 0;
-const child_process_1 = __nccwpck_require__(5317);
-class GitUtils {
-    octokit;
-    token;
-    constructor(octokit, token) {
-        this.octokit = octokit;
-        this.token = token;
-    }
-    async getPullRequestDiff(owner, repo, pullNumber) {
-        try {
-            // Use GitHub API to get diff
-            const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, {
-                headers: {
-                    Authorization: `Bearer ${this.token}`,
-                    Accept: "application/vnd.github.v3.diff",
-                },
-            });
-            if (!response.ok) {
-                throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
-            }
-            const diff = await response.text();
-            return diff;
-        }
-        catch (error) {
-            // Fallback: use git command if available
-            try {
-                const baseRef = await this.getBaseRef(owner, repo, pullNumber);
-                const headRef = await this.getHeadRef(owner, repo, pullNumber);
-                if (baseRef && headRef) {
-                    (0, child_process_1.execSync)(`git fetch origin ${baseRef} ${headRef}`, { stdio: "pipe" });
-                    const diff = (0, child_process_1.execSync)(`git diff ${baseRef}...${headRef}`, { encoding: "utf-8" });
-                    return diff;
-                }
-            }
-            catch {
-                // ignore fallback errors
-            }
-            throw error;
-        }
-    }
-    async getBaseRef(owner, repo, pullNumber) {
-        try {
-            const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-            return data.base.ref;
-        }
-        catch {
-            return undefined;
-        }
-    }
-    async getHeadRef(owner, repo, pullNumber) {
-        try {
-            const { data } = await this.octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-            return data.head.ref;
-        }
-        catch {
-            return undefined;
-        }
-    }
-    async getFileContent(owner, repo, path, ref) {
-        try {
-            const { data } = await this.octokit.rest.repos.getContent({
-                owner,
-                repo,
-                path,
-                ref,
-            });
-            if ("content" in data) {
-                return Buffer.from(data.content, "base64").toString("utf-8");
-            }
-            return "";
-        }
-        catch {
-            return "";
-        }
-    }
-}
-exports.GitUtils = GitUtils;
-
-
-/***/ }),
-
-/***/ 5870:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.GitHubReviewer = void 0;
-const core = __importStar(__nccwpck_require__(7484));
-class GitHubReviewer {
-    octokit;
-    constructor(octokit) {
-        this.octokit = octokit;
-    }
-    async postReview(owner, repo, pullNumber, findings) {
-        try {
-            core.info("Posting review to PR #" + pullNumber + "...");
-            // Fetch file patches to map line positions
-            const { data: files } = await this.octokit.rest.pulls.listFiles({
-                owner,
-                repo,
-                pull_number: pullNumber,
-            });
-            // Build line-level comments from findings
-            const comments = this.buildReviewComments(findings, files);
-            // Build the review summary body (high-level)
-            const body = this.buildReviewBody(findings);
-            // Determine review event type
-            const event = findings.critical.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
-            const { data: review } = await this.octokit.rest.pulls.createReview({
-                owner,
-                repo,
-                pull_number: pullNumber,
-                body,
-                event,
-                comments,
-            });
-            core.info("Posted review #" + review.id + " with " + comments.length + " individual line comments");
-        }
-        catch (error) {
-            core.error("Failed to post review: " + error);
-            throw error;
-        }
-    }
-    /**
-     * Build separate line-level comments for each finding that can be mapped to a line.
-     * Each comment appears as an individual thread the repo owner can reply to and resolve.
-     */
-    buildReviewComments(findings, files) {
-        const comments = [];
-        // Combine all findings
-        const allFindings = [
-            ...findings.critical,
-            ...findings.important,
-            ...findings.suggestions,
-        ];
-        for (const finding of allFindings) {
-            // Need both file and line to post a line comment
-            if (!finding.file || !finding.line)
-                continue;
-            const diffFile = files.find((f) => f.filename === finding.file);
-            if (!diffFile) {
-                core.warning("Could not find diff for file: " + finding.file);
-                continue;
-            }
-            const position = this.mapLineToPosition(diffFile.patch || "", finding.line);
-            if (!position) {
-                core.warning("Could not map line " + finding.line + " to diff position for file: " + finding.file);
-                continue;
-            }
-            let commentBody = this.formatCommentBody(finding);
-            comments.push({
-                path: finding.file,
-                position,
-                body: commentBody,
-            });
-        }
-        return comments;
-    }
-    formatCommentBody(finding) {
-        const severityEmoji = finding.severity === "critical"
-            ? ":x: CRITICAL"
-            : finding.severity === "important"
-                ? ":warning: IMPORTANT"
-                : ":bulb: SUGGESTION";
-        let body = severityEmoji + "\n\n" + finding.description;
-        if (finding.recommendation) {
-            body += "\n\n**Recommendation:** " + finding.recommendation;
-        }
-        if (finding.codeSnippet) {
-            body += "\n\n```\n" + finding.codeSnippet + "\n```";
-        }
-        return body;
-    }
-    /**
-     * Build a concise summary body. Findings are shown here ONLY if they
-     * could not be mapped to individual line comments.
-     */
-    buildReviewBody(findings) {
-        const parts = [];
-        parts.push("## :robot: Code Review");
-        parts.push("");
-        // Stats summary
-        const statBlocks = [];
-        if (findings.critical.length > 0) {
-            statBlocks.push(":x: **" + findings.critical.length + " Critical**");
-        }
-        if (findings.important.length > 0) {
-            statBlocks.push(":warning: **" + findings.important.length + " Important**");
-        }
-        if (findings.suggestions.length > 0) {
-            statBlocks.push(":bulb: **" + findings.suggestions.length + " Suggestions**");
-        }
-        if (statBlocks.length === 0) {
-            statBlocks.push(":white_check_mark: **No issues found**");
-        }
-        parts.push(statBlocks.join(" | "));
-        // Overall summary from the model
-        if (findings.summary) {
-            parts.push("");
-            parts.push("### Summary");
-            parts.push(findings.summary);
-        }
-        // Add any "orphan" findings that could not be mapped to lines
-        const orphanFindings = [
-            ...findings.critical,
-            ...findings.important,
-            ...findings.suggestions,
-        ].filter((f) => !f.file || !f.line);
-        if (orphanFindings.length > 0) {
-            parts.push("");
-            parts.push("---");
-            parts.push("### :page_facing_up: General Findings (not linked to specific lines)");
-            for (let i = 0; i < orphanFindings.length; i++) {
-                parts.push("");
-                parts.push(this.formatOrphanFinding(i + 1, orphanFindings[i]));
-            }
-        }
-        parts.push("");
-        parts.push("---");
-        parts.push("*Reviews powered by [Universal Code Reviewer](https://github.com/antongulin/universal-code-reviewer)*");
-        return parts.join("\n");
-    }
-    formatOrphanFinding(index, finding) {
-        const location = finding.file ? " (`" + finding.file + "`)" : "";
-        let result = finding.severity === "critical"
-            ? ":x:"
-            : finding.severity === "important"
-                ? ":warning:"
-                : ":bulb:";
-        result += " **" + index + location + "** — " + finding.description;
-        if (finding.recommendation) {
-            result += "\n> " + finding.recommendation;
-        }
-        return result;
-    }
-    /**
-     * Map a file line number to the diff position GitHub expects.
-     * Position is the 1-based index from the first @@ hunk header.
-     */
-    mapLineToPosition(patch, targetLine) {
-        if (!patch)
-            return null;
-        let position = 0;
-        let currentLine = 0;
-        let inHunk = false;
-        for (const line of patch.split("\n")) {
-            // Hunk header: parse the starting line number in the NEW file
-            if (line.startsWith("@@")) {
-                const match = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-                if (match) {
-                    // +N is the first line of this hunk in the new file
-                    currentLine = parseInt(match[1], 10);
-                }
-                inHunk = true;
-                position++; // @@ line counts toward position in GitHub's diff
-                continue;
-            }
-            if (!inHunk) {
-                // Lines before the first hunk (shouldn't happen in patch)
-                continue;
-            }
-            // "\ No newline at end of file" marker doesn't count
-            if (line.startsWith("\\")) {
-                position++;
-                continue;
-            }
-            position++;
-            if (line.startsWith("+")) {
-                // Added line exists in the new file
-                if (currentLine === targetLine) {
-                    return position;
-                }
-                currentLine++;
-            }
-            else if (line.startsWith("-")) {
-                // Removed line — does not exist in new file, keep position but don't count line
-            }
-            else {
-                // Context line — exists in both old and new file
-                if (currentLine === targetLine) {
-                    return position;
-                }
-                currentLine++;
-            }
-        }
-        return null;
-    }
-}
-exports.GitHubReviewer = GitHubReviewer;
-
-
-/***/ }),
-
-/***/ 6310:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.LLMClient = void 0;
-const openai_1 = __nccwpck_require__(2583);
-const core = __importStar(__nccwpck_require__(7484));
-class LLMClient {
-    client;
-    model;
-    constructor(baseUrl, apiKey, model) {
-        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
-        this.client = new openai_1.OpenAI({
-            baseURL: baseUrl,
-            apiKey: apiKey || "ollama",
-            maxRetries: 3,
-            timeout: 120000, // 2 minutes for large diffs
-        });
-        this.model = model;
-    }
-    async chatCompletion(systemPrompt, userContent) {
-        try {
-            const response = await this.client.chat.completions.create({
-                model: this.model,
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userContent },
-                ],
-                temperature: 0.1,
-                max_tokens: 8192,
-            });
-            const content = response.choices[0]?.message?.content || "";
-            if (!content) {
-                throw new Error("Empty response from LLM");
-            }
-            return content;
-        }
-        catch (error) {
-            core.error(`LLM API error: ${error}`);
-            throw new Error(`Failed to get response from LLM: ${error}`);
-        }
-    }
-}
-exports.LLMClient = LLMClient;
-
-
-/***/ }),
-
-/***/ 1730:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core = __importStar(__nccwpck_require__(7484));
-const github = __importStar(__nccwpck_require__(3228));
-const llm_client_1 = __nccwpck_require__(6310);
-const git_utils_1 = __nccwpck_require__(9807);
-const review_parser_1 = __nccwpck_require__(435);
-const github_reviewer_1 = __nccwpck_require__(5870);
-const review_prompts_1 = __nccwpck_require__(1081);
-const AVAILABLE_COMMANDS = [
-    { command: "/review", description: "Posts a full code review of the pull request" },
-    { command: "/summary", description: "Posts a summary of the changes in the pull request" },
-    { command: "/help", description: "Shows available commands" },
-];
-async function run() {
-    try {
-        const eventName = github.context.eventName;
-        const payload = github.context.payload;
-        const token = core.getInput("github-token", { required: true });
-        const octokit = github.getOctokit(token);
-        const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
-        const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
-        const model = core.getInput("model", { required: true });
-        const triggerOnMention = core.getInput("trigger-on-mention") === "true";
-        const failOnCritical = core.getInput("fail-on-critical") === "false";
-        const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
-        core.info(`Event: ${eventName}`);
-        core.info(`Model: ${model}`);
-        let shouldRun = false;
-        let prNumber;
-        let command = "review"; // default command for PR events
-        if (eventName === "pull_request" || eventName === "pull_request_target") {
-            shouldRun = true;
-            prNumber = payload.pull_request?.number;
-        }
-        else if (eventName === "issue_comment") {
-            const commentBody = payload.comment?.body || "";
-            // Detect slash commands
-            if (commentBody.includes("/help")) {
-                await postHelpComment(octokit, payload);
-                return;
-            }
-            else if (commentBody.includes("/review")) {
-                command = "review";
-                shouldRun = true;
-            }
-            else if (commentBody.includes("/summary")) {
-                command = "summary";
-                shouldRun = true;
-            }
-            else if (commentBody.includes("@code-reviewer")) {
-                // Legacy @mention falls back to full review
-                command = "review";
-                shouldRun = true;
-            }
-            if (shouldRun) {
-                prNumber = payload.issue?.number;
-            }
-        }
-        if (!shouldRun || !prNumber) {
-            core.info("No matching trigger found. Skipping.");
-            return;
-        }
-        const owner = github.context.repo.owner;
-        const repo = github.context.repo.repo;
-        core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
-        const gitUtils = new git_utils_1.GitUtils(octokit, token);
-        const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
-        if (!diff || diff.trim().length === 0) {
-            core.warning("No diff found for this PR.");
-            return;
-        }
-        const truncatedDiff = diff.length > maxDiffSize
-            ? diff.slice(0, maxDiffSize) + "\n\n[... Diff truncated due to size limit]"
-            : diff;
-        core.info(`Diff size: ${diff.length} chars${diff.length > maxDiffSize ? " (truncated)" : ""}`);
-        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model);
-        let reviewText;
-        if (command === "summary") {
-            reviewText = await runSummary(llm, truncatedDiff);
-        }
-        else {
-            reviewText = await runReview(llm, truncatedDiff);
-        }
-        if (command === "summary") {
-            // Post summary as a regular comment
-            await octokit.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: prNumber,
-                body: reviewText,
-            });
-        }
-        else {
-            // Full review parsed and posted as a review
-            core.info("Parsing review response...");
-            const findings = review_parser_1.ReviewParser.parse(reviewText);
-            core.info(`Found ${findings.critical.length} critical, ${findings.important.length} important, ${findings.suggestions.length} suggestions`);
-            const reviewer = new github_reviewer_1.GitHubReviewer(octokit);
-            await reviewer.postReview(owner, repo, prNumber, findings);
-            if (findings.critical.length > 0 && failOnCritical) {
-                core.setFailed(`Found ${findings.critical.length} critical issue(s). Failing check.`);
-            }
-        }
-        core.info("Done.");
-    }
-    catch (error) {
-        core.setFailed(error instanceof Error ? error.message : String(error));
-    }
-}
-async function postHelpComment(octokit, payload) {
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
-    const issueNumber = payload.issue?.number;
-    if (!issueNumber)
-        return;
-    const helpBody = (0, review_prompts_1.getHelpMessage)();
-    await octokit.rest.issues.createComment({
-        owner,
-        repo,
-        issue_number: issueNumber,
-        body: helpBody,
-    });
-    core.info("Posted help comment.");
-}
-async function runReview(llm, diff) {
-    const systemPrompt = (0, review_prompts_1.getReviewPrompt)();
-    const userContent = buildReviewInput(diff);
-    core.info("Getting full code review...");
-    return await llm.chatCompletion(systemPrompt, userContent);
-}
-async function runSummary(llm, diff) {
-    const systemPrompt = (0, review_prompts_1.getSummaryPrompt)();
-    const userContent = buildSummaryInput(diff);
-    core.info("Getting PR summary...");
-    return await llm.chatCompletion(systemPrompt, userContent);
-}
-function buildReviewInput(diff) {
-    return [
-        "Please review the following code diff and provide structured feedback.",
-        "Format your response with these sections:",
-        "## Critical Issues (must fix)",
-        "## Important Issues (should fix)",
-        "## Suggestions (nice to have)",
-        "## Summary",
-        "---",
-        "CODE DIFF:",
-        "```diff",
-        diff,
-        "```",
-    ].join("\n");
-}
-function buildSummaryInput(diff) {
-    return [
-        "Summarize the following pull request diff. Provide:",
-        "1. High-level overview of what changed",
-        "2. Key files affected",
-        "3. Any notable patterns or patterns that could be improved",
-        "Be concise but informative.",
-        "---",
-        "CODE DIFF:",
-        "```diff",
-        diff,
-        "```",
-    ].join("\n");
-}
-run();
-
-
-/***/ }),
-
-/***/ 1081:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getReviewPrompt = getReviewPrompt;
-exports.getSummaryPrompt = getSummaryPrompt;
-exports.getHelpMessage = getHelpMessage;
-function getReviewPrompt() {
-    return [
-        "You are a Senior Code Reviewer with deep expertise in software architecture, design patterns, and best practices.",
-        "",
-        "Analyze the provided code diff for:",
-        "",
-        "1. Plan Alignment -- Does the implementation match stated goals?",
-        "2. Code Quality -- Patterns, conventions, error handling, type safety",
-        "3. Architecture -- SOLID principles, separation of concerns, scalability",
-        "4. Security -- Input validation, auth flaws, data exposure, dependency vulnerabilities",
-        "5. Documentation -- Comments, file headers, coding standards",
-        "6. Maintainability -- Naming, test coverage, code organization",
-        "",
-        "Output Format (STRICT):",
-        "",
-        "### Summary",
-        "Concise overall assessment (2-4 sentences).",
-        "",
-        "### Critical Issues (must fix)",
-        "For each finding, use this exact format (file and line REQUIRED):",
-        "- src/auth.ts:42 -- Missing input validation on userId parameter. SQL injection risk. Add parameterized query.",
-        "- src/utils.js:15 -- Hardcoded API key exposed.",
-        "",
-        "### Important Issues (should fix)",
-        "- src/handlers.ts:88 -- No error handling for network timeout. Retry with exponential backoff.",
-        "- src/handlers.ts:102 -- Magic number used. Extract to named constant.",
-        "",
-        "### Suggestions (nice to have)",
-        "Refactors, style improvements, architecture enhancements -- non-blocking.",
-        "",
-        "Severity Rules:",
-        "- Critical: Security vulnerability, production crash, data loss, missing auth, broken core function",
-        "- Important: Performance issue, missing error handling, logic flaw, significant code smell",
-        "- Suggestion: Naming, style, minor refactor, documentation gap, test coverage",
-        "",
-        "Guidelines:",
-        "- CRITICAL FORMAT RULE: Each finding MUST start with its exact file and line number in this format: file.ext:123 -- description here. This enables posting as a separate comment thread on that line.",
-        "- Your output will be parsed into individual comments. One bullet = one line-level comment.",
-        "- Always acknowledge what was done well before highlighting issues.",
-        "- Be thorough but concise. Every item should be actionable and specific to the diff.",
-        "- Propose concrete code examples when helpful.",
-        "- If no issues in a tier, write None rather than omitting.",
-        "- Do not hallucinate issues. Only flag problems actually visible in the diff.",
-    ].join("\n");
-}
-function getSummaryPrompt() {
-    return [
-        "You are a technical summarizer. Provide a concise, high-level overview of a pull request diff.",
-        "",
-        "Structure your response as:",
-        "",
-        "### What Changed",
-        "2-3 sentences describing the overall purpose and scope of the changes.",
-        "",
-        "### Key Files",
-        "List the most important files modified and a one-line description of what changed in each.",
-        "",
-        "### Notable Patterns",
-        "- Any design patterns used (or missed opportunities)",
-        "- Any architectural shifts",
-        "- Any potential concerns worth flagging (but not a full review)",
-        "",
-        "Guidelines:",
-        "- Be concise. Aim for a 60-second read.",
-        "- Mention both additions and removals.",
-        "- Do not suggest code fixes -- this is summary only.",
-    ].join("\n");
-}
-function getHelpMessage() {
-    return [
-        "Available commands for **Universal Code Reviewer**:",
-        "",
-        "| Command | Description |",
-        "|---|---|",
-        "| /review | Full code review with severity tiers (Critical / Important / Suggestion) |",
-        "| /summary | Concise PR overview -- what changed, key files, notable patterns |",
-        "| /help | Show this message |",
-        "",
-        "You can also use:",
-        "| Trigger | Description |",
-        "|---|---|",
-        "| @code-reviewer | Alias for /review |",
-        "| Auto on PR | Every new PR gets a review automatically |",
-        "",
-        "This action uses your own LLM endpoint -- no usage quotas, no vendor lock-in.",
-    ].join("\n");
-}
-
-
-/***/ }),
-
-/***/ 435:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ReviewParser = void 0;
-const core = __importStar(__nccwpck_require__(7484));
-class ReviewParser {
-    static parse(rawText) {
-        const review = {
-            summary: "",
-            critical: [],
-            important: [],
-            suggestions: [],
-            rawResponse: rawText,
-        };
-        try {
-            const summaryMatch = rawText.match(/##\s*Summary[\s\S]*?(?=##\s*(Critical|Important|Suggestion|$))/i);
-            if (summaryMatch) {
-                review.summary = summaryMatch[0].replace(/##\s*Summary\s*/i, "").trim();
-            }
-            const criticalSection = this.extractSection(rawText, "Critical");
-            const importantSection = this.extractSection(rawText, "Important");
-            const suggestionSection = this.extractSection(rawText, "Suggestion");
-            review.critical = this.parseFindings(criticalSection, "critical");
-            review.important = this.parseFindings(importantSection, "important");
-            review.suggestions = this.parseFindings(suggestionSection, "suggestion");
-            core.info(`Parsed: ${review.critical.length} critical, ${review.important.length} important, ${review.suggestions.length} suggestions`);
-        }
-        catch (error) {
-            core.warning(`Failed to parse structured review: ${error}. Treating entire response as raw summary.`);
-            review.summary = rawText;
-        }
-        return review;
-    }
-    static extractSection(text, sectionName) {
-        const regex = new RegExp(`##\\s*${sectionName}[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=##\\s*(?:Critical|Important|Suggestion|Summary|$))`, "i");
-        const match = text.match(regex);
-        return match ? match[1].trim() : "";
-    }
-    static parseFindings(section, severity) {
-        if (!section)
-            return [];
-        const lines = section.split("\n");
-        const findings = [];
-        let currentFinding = null;
-        let descriptionLines = [];
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed)
-                continue;
-            const isNewItem = /^[-*•·]\d*\./.test(trimmed) || /^\d+\./.test(trimmed);
-            if (isNewItem) {
-                if (currentFinding) {
-                    currentFinding.description = descriptionLines.join("\n").trim();
-                    if (currentFinding.description) {
-                        findings.push(currentFinding);
-                    }
-                }
-                const fileLine = this.extractFileAndLine(trimmed);
-                currentFinding = {
-                    severity: severity,
-                    category: "",
-                    description: "",
-                    recommendation: "",
-                    file: fileLine.file,
-                    line: fileLine.line,
-                };
-                // Use cleaned text (without file:line prefix) as first description line
-                descriptionLines = [fileLine.cleanedText];
-            }
-            else if (trimmed.startsWith("  ") || trimmed.startsWith("\t")) {
-                if (this.looksLikeCode(trimmed)) {
-                    if (currentFinding) {
-                        currentFinding.codeSnippet = (currentFinding.codeSnippet || "") + trimmed + "\n";
-                    }
-                }
-                else {
-                    descriptionLines.push(trimmed);
-                }
-            }
-            else {
-                descriptionLines.push(trimmed);
-            }
-        }
-        if (currentFinding) {
-            currentFinding.description = descriptionLines.join("\n").trim();
-            if (currentFinding.description) {
-                findings.push(currentFinding);
-            }
-        }
-        return findings;
-    }
-    static looksLikeCode(text) {
-        const codeIndicators = [
-            /^\s*(def|class|function|const|let|var|import|export|if|for|while|return)/,
-            /^\s*[/].*[/]/,
-            /^\s*[`"']/,
-            /^\s*[{\[(]/,
-        ];
-        return codeIndicators.some((pattern) => pattern.test(text));
-    }
-    static extractFileAndLine(text) {
-        // Match pattern like `src/auth.ts:42 — description` or `src/auth.ts:42 - description`
-        const fullPattern = /^[`']?([^`\s]+\.(?:[a-zA-Z0-9]+))\s*:\s*(\d+)\s*[\-\u2013\u2014]\s*(.+)$/i;
-        const match = text.match(fullPattern);
-        if (match) {
-            return {
-                file: match[1],
-                line: parseInt(match[2], 10),
-                cleanedText: match[3].trim(),
-            };
-        }
-        // Fallback: try to find file and line anywhere in the text
-        const filePattern = /[`']?([^`\s]+\.(?:[a-zA-Z0-9]+))[`']?/i;
-        const linePattern = /:(\d+)/i;
-        const fileMatch = text.match(filePattern);
-        const lineMatch = text.match(linePattern);
-        return {
-            file: fileMatch ? fileMatch[1] : undefined,
-            line: lineMatch ? parseInt(lineMatch[1], 10) : undefined,
-            cleanedText: text,
-        };
-    }
-}
-exports.ReviewParser = ReviewParser;
-
-
-/***/ }),
-
 /***/ 2078:
 /***/ ((module) => {
 
@@ -48576,8 +48576,8 @@ var __webpack_exports__ = {};
 var exports = __webpack_exports__;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-__nccwpck_require__(1730);
-
+__nccwpck_require__(7160);
+//# sourceMappingURL=index.js.map
 })();
 
 module.exports = __webpack_exports__;
