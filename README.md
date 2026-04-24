@@ -1,57 +1,85 @@
 # Universal Code Reviewer
 
-AI code reviews for GitHub pull requests using the LLM provider you choose.
+Bring-your-own-LLM code reviews for GitHub pull requests.
 
-Use OpenAI, Ollama, Groq, Together AI, Ollama Cloud, or any OpenAI-compatible API. This action does not add its own review quota, subscription, or model lock-in. Your real limits are your GitHub Actions minutes, your provider limits, and the model you run.
+Universal Code Reviewer is a GitHub Action that reads a pull request diff, sends it to the OpenAI-compatible LLM endpoint you configure, and posts review feedback back to the PR. It is useful if you already have API access, Ollama Cloud, a self-hosted model, or another provider subscription and do not want to be locked into one hosted review product.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Why Use This?
+## Why This Exists
 
-Most AI review tools are tied to one vendor, one model, one pricing model, and one set of usage limits. Universal Code Reviewer is different:
+I used several AI review tools, including Gemini-based reviewers, GitHub Copilot review, CodeRabbit-style review tools, and similar bots. They are useful, but I kept running into the same problem: usage limits, model restrictions, or vendor lock-in.
 
-| You want | This project gives you |
+At the same time, I already had access to Ollama Cloud and other model APIs. The idea was simple: instead of waiting for someone else's quota or model choice, create a small reusable GitHub Action that can review PRs with any OpenAI-compatible model.
+
+The core approach is the same principle used by many public AI reviewer prompts and instructions: collect the PR diff, ask a strong model for structured feedback, then post actionable findings back to GitHub. One of the references behind this idea was the [Superpowers code-reviewer agent](https://github.com/obra/superpowers/blob/main/agents/code-reviewer.md), which shows how useful a focused review prompt can be. This project packages that kind of workflow into a reusable GitHub Action.
+
+## How It Works
+
+At a high level:
+
+1. A pull request is opened, updated, or manually requested with `/review`.
+2. GitHub Actions starts this action in your repository.
+3. The action posts a short “working on it” comment so the author knows the review started.
+4. The action fetches the PR diff from GitHub.
+5. The diff is sent to your configured LLM endpoint.
+6. The model returns structured feedback: Critical, Important, Suggestions, and Summary.
+7. The action posts a GitHub PR review with line comments when possible.
+
+You control the endpoint, the API key, and the model.
+
+## Why Use It?
+
+| If you want | This gives you |
 | --- | --- |
-| More control | Bring your own LLM endpoint and API key |
-| No model lock-in | Switch models by changing one workflow input |
-| Private reviews | Use self-hosted Ollama or a private OpenAI-compatible endpoint |
-| Predictable costs | Pay your provider directly, with no markup from this action |
-| Simple adoption | Add one GitHub Actions workflow to a repo |
-| Useful PR feedback | Review summaries plus Critical, Important, and Suggestion findings |
+| Model choice | Use any OpenAI-compatible model |
+| No review-tool quota | The action has no daily review limit of its own |
+| Existing API usage | Use the provider or subscription you already pay for |
+| Self-hosting | Use Ollama or another private endpoint |
+| Simple setup | Add one workflow file and three secrets |
+| Transparent cost | You pay GitHub Actions minutes and your LLM provider directly |
 
-## What It Does
+## Important Tradeoffs
 
-- Runs automatically when a pull request is opened or updated.
-- Lets you manually request a review with `/review` or `@code-reviewer`.
-- Lets you request a short PR summary with `/summary`.
-- Sends the PR diff to your configured LLM endpoint.
-- Posts a GitHub PR review with a summary and line-level comments when possible.
-- Can fail the check when critical issues are found.
+This is not magic and it is not completely free in every setup.
 
-## What It Does Not Do
+| Tradeoff | What it means |
+| --- | --- |
+| GitHub Actions limits still apply | Private repos use your Actions minutes |
+| LLM provider limits still apply | Your API provider can rate-limit or charge you |
+| Review quality depends on the model | Smaller/faster models may miss deeper issues |
+| Large PRs are harder | Very large diffs can be truncated or should be split |
+| Privacy depends on your endpoint | Hosted APIs receive your diff; self-hosted endpoints keep it under your control |
 
-- It does not provide free LLM usage. You pay your provider, or you run your own model.
-- It does not remove GitHub Actions limits. Private repos still use your Actions minutes.
-- It does not guarantee perfect findings. Review quality depends on the model and diff context.
-- It does not keep code fully local unless your configured endpoint is local/private.
-- It does not yet provide one-click org-wide installation. That is planned as a GitHub App.
+## Cost And Limits
+
+Universal Code Reviewer does not add a daily review quota. Your real limits are:
+
+- GitHub Actions minutes.
+- Your LLM provider billing and rate limits.
+- Your model context window.
+- The configured `max-diff-size`.
+
+For private repositories, GitHub's free plan includes about 2,000 Actions minutes per month. If a full review run takes up to 10 minutes, that is roughly 200 review runs per month. Many reviews are faster than that, often around 1-2 minutes, but large PRs or slower self-hosted models can take longer.
+
+For public repositories, GitHub-hosted Actions minutes are generally free. Your LLM/API usage still depends on the provider you choose.
 
 ## Quick Start
 
-### 1. Choose A Provider
+### 1. Choose Your LLM Provider
 
-Use any API that supports the OpenAI Chat Completions format.
+Use any provider with an OpenAI-compatible Chat Completions API.
 
 | Provider | Base URL example | API key |
 | --- | --- | --- |
 | OpenAI | `https://api.openai.com/v1` | OpenAI API key |
 | Groq | `https://api.groq.com/openai/v1` | Groq API key |
 | Together AI | `https://api.together.xyz/v1` | Together API key |
-| Ollama Cloud | Provider URL from Ollama | Ollama Cloud key |
+| Ollama Cloud | Ollama Cloud OpenAI-compatible URL | Ollama Cloud key |
 | Self-hosted Ollama | `http://your-server:11434/v1` | Use `ollama` |
 | Custom endpoint | Your OpenAI-compatible URL | Your API key |
 
-Important: GitHub-hosted runners cannot reach `localhost` on your laptop. If you use Ollama, run it on a reachable server or expose it with a private network/tunnel. See [Self-Hosting](#self-hosting).
+GitHub-hosted runners cannot reach `localhost` on your laptop. If you use Ollama, run it on a reachable server, use a tunnel/private network, or use a self-hosted GitHub runner.
 
 ### 2. Add Secrets
 
@@ -61,13 +89,13 @@ In the repository where you want reviews, go to **Settings -> Secrets and variab
 | --- | --- | --- |
 | `LLM_API_KEY` | Yes | `sk-...` or `ollama` |
 | `LLM_BASE_URL` | Yes | `https://api.openai.com/v1` |
-| `LLM_MODEL` | Optional | `gpt-4o`, `llama3.2`, `codellama:13b` |
+| `LLM_MODEL` | Yes | `gpt-4o`, `llama3.2`, `codellama:13b`, provider-specific model name |
 
-For many repositories, set these as organization secrets and allow selected repos to use them.
+The action does not recommend one default model. Choose the model that matches your budget, speed, and quality needs. For example, Ollama Cloud can be used with its OpenAI-compatible API and any model available in your Ollama account, but the workflow should still keep the model configurable through `LLM_MODEL`.
 
 ### 3. Add The Workflow
 
-Create `.github/workflows/code-review.yml` in the repository you want reviewed:
+Create `.github/workflows/code-review.yml`:
 
 ```yaml
 name: Code Review
@@ -90,8 +118,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && (
         contains(github.event.comment.body, '/review') ||
         contains(github.event.comment.body, '/summary') ||
-        contains(github.event.comment.body, '/help') ||
-        contains(github.event.comment.body, '@code-reviewer')
+        contains(github.event.comment.body, '/help')
       ))
     runs-on: ubuntu-latest
     steps:
@@ -103,21 +130,33 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-api-key: ${{ secrets.LLM_API_KEY }}
           llm-base-url: ${{ secrets.LLM_BASE_URL }}
-          model: ${{ secrets.LLM_MODEL || 'kimi-k2.6:cloud' }}
+          model: ${{ secrets.LLM_MODEL }}
           fail-on-critical: "false"
 ```
 
-Open a pull request. The action will review the diff and post results back to the PR.
+Open a PR or comment `/review` on an existing PR.
 
-## Common Setups
+## Commands
+
+Comment on a pull request:
+
+| Command | Result |
+| --- | --- |
+| `/review` | Full review with Critical, Important, and Suggestion findings |
+| `/summary` | Short explanation of what changed |
+| `/help` | List available commands |
+
+There is no `@code-reviewer` trigger. That looks like a GitHub username mention and can notify or reference the wrong account. Slash commands are clearer and safer.
+
+## Usage Variations
 
 ### Automatic Review On Every PR
 
-Use the Quick Start workflow as-is. This is best for teams that want every PR checked.
+Use the Quick Start workflow. This is best when you want every PR reviewed automatically.
 
 ### Manual Review Only
 
-Use this when you want to avoid review noise or reduce LLM cost.
+Use this if you want to reduce cost and only run reviews when requested.
 
 ```yaml
 name: Manual Code Review
@@ -137,8 +176,7 @@ jobs:
       github.event.issue.pull_request && (
         contains(github.event.comment.body, '/review') ||
         contains(github.event.comment.body, '/summary') ||
-        contains(github.event.comment.body, '/help') ||
-        contains(github.event.comment.body, '@code-reviewer')
+        contains(github.event.comment.body, '/help')
       )
     runs-on: ubuntu-latest
     steps:
@@ -148,31 +186,31 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           llm-api-key: ${{ secrets.LLM_API_KEY }}
           llm-base-url: ${{ secrets.LLM_BASE_URL }}
-          model: ${{ secrets.LLM_MODEL || 'gpt-4o' }}
+          model: ${{ secrets.LLM_MODEL }}
 ```
 
-Then comment on a PR:
+Then comment:
 
 ```text
 /review
 ```
 
-### Strict Mode For Critical Issues
+### Strict Mode
 
-Use this if you want the workflow check to fail when the reviewer finds critical issues.
+Fail the workflow when critical issues are found:
 
 ```yaml
 with:
   github-token: ${{ secrets.GITHUB_TOKEN }}
   llm-api-key: ${{ secrets.LLM_API_KEY }}
   llm-base-url: ${{ secrets.LLM_BASE_URL }}
-  model: ${{ secrets.LLM_MODEL || 'gpt-4o' }}
+  model: ${{ secrets.LLM_MODEL }}
   fail-on-critical: "true"
 ```
 
 ### Different Model Per Repository
 
-Use org-level secrets for the API key and base URL, then choose a model per repo.
+Use organization secrets for `LLM_API_KEY` and `LLM_BASE_URL`, then set `LLM_MODEL` differently per repo.
 
 ```yaml
 with:
@@ -180,31 +218,6 @@ with:
   llm-api-key: ${{ secrets.LLM_API_KEY }}
   llm-base-url: ${{ secrets.LLM_BASE_URL }}
   model: "codellama:70b"
-```
-
-## Slash Commands
-
-Comment on a pull request with one of these commands:
-
-| Command | Result |
-| --- | --- |
-| `/review` | Full review with Critical, Important, and Suggestion findings |
-| `/summary` | Short explanation of what changed |
-| `/help` | List available commands |
-| `@code-reviewer` | Alias for `/review` when `trigger-on-mention` is enabled |
-
-Examples:
-
-```text
-/review
-```
-
-```text
-/summary
-```
-
-```text
-Can you check the auth changes? @code-reviewer
 ```
 
 ## Inputs
@@ -216,31 +229,26 @@ Can you check the auth changes? @code-reviewer
 | `api-key` | No | empty | Alias for `llm-api-key` |
 | `llm-base-url` | Yes | none | OpenAI-compatible API base URL |
 | `base-url` | No | empty | Alias for `llm-base-url` |
-| `model` | Yes | `kimi-k2.6:cloud` | Model name sent to the provider |
-| `trigger-on-mention` | No | `true` | Enables `@code-reviewer` comments |
+| `model` | Yes | none | Model name sent to the provider |
 | `fail-on-critical` | No | `false` | Fails the workflow if critical issues are found |
 | `max-diff-size` | No | `50000` | Maximum diff characters sent to the model |
 
-## Model Suggestions
+## Model Selection
 
-There is no single best model. Pick based on cost, latency, privacy, and review quality.
+There is no universal best model. Use a fast model for summaries and smaller PRs; use a stronger model for security-sensitive or architecture-heavy reviews.
 
-| Model | Good for | Notes |
+| Model type | Good for | Tradeoff |
 | --- | --- | --- |
-| `gpt-4o` | General code review | Strong default if using OpenAI |
-| `kimi-k2.6:cloud` | Deep review and reasoning | Default model in this project |
-| `deepseek-coder` | Code-focused review | Good if your provider supports it |
-| `codellama:13b` | Self-hosted lightweight review | Faster, lower resource usage |
-| `codellama:70b` | Self-hosted higher-quality review | Requires more hardware |
-| `llama3.2` | Fast summaries and basic checks | Best for speed, not deep review |
+| Fast hosted model | Quick feedback | May miss deeper issues |
+| Strong hosted model | Better reasoning | Higher token cost |
+| Small self-hosted model | Low cost and privacy | Lower review quality |
+| Large self-hosted model | Better private reviews | Requires more hardware |
 
-For important repositories, test a few models on real PRs before standardizing.
+Examples people may try: `gpt-4o`, `deepseek-coder`, `codellama:13b`, `codellama:70b`, `llama3.2`, Ollama Cloud models, or other provider-specific model names.
 
 ## Self-Hosting
 
-Self-hosting is useful when privacy, cost control, or provider independence matters.
-
-### Run Ollama
+Self-hosting is useful when privacy or provider independence matters.
 
 ```bash
 # macOS
@@ -262,78 +270,45 @@ Ollama exposes an OpenAI-compatible API at:
 http://localhost:11434/v1
 ```
 
-That URL only works from the same machine. GitHub Actions needs a reachable address.
-
-### Make Ollama Reachable From GitHub Actions
+That works only from the same machine. GitHub Actions needs a reachable URL.
 
 | Option | Best for | Notes |
 | --- | --- | --- |
-| VPS or dedicated server | Stable team usage | Run Ollama on a server and use its private/public URL |
-| Tailscale | Private networking | Requires runner/network setup that can reach your Tailnet |
-| Cloudflare Tunnel | Quick testing | Public tunnel URL; protect access carefully |
-| Self-hosted GitHub runner | Maximum privacy | Run the GitHub runner on the same network as Ollama |
-
-Example base URL for a server:
-
-```text
-http://your-server-ip:11434/v1
-```
+| VPS or dedicated server | Stable team usage | Run Ollama on a server and point `LLM_BASE_URL` to it |
+| Self-hosted GitHub runner | Maximum privacy | Runner and Ollama can live on the same private network |
+| Tailscale | Private networking | Useful when the runner can reach your Tailnet |
+| Cloudflare Tunnel | Quick testing | Public tunnel URL; protect it carefully |
 
 ## Security And Privacy
 
-The action sends PR diffs to the LLM endpoint you configure. Choose that endpoint based on your data policy.
+The action sends PR diffs to the LLM endpoint you configure.
 
 | Setup | Where code goes |
 | --- | --- |
 | OpenAI, Groq, Together, or another hosted API | To that provider |
+| Ollama Cloud | To Ollama Cloud |
 | Self-hosted Ollama on your server | To your server |
-| Self-hosted GitHub runner plus local Ollama | Stays inside your infrastructure |
+| Self-hosted GitHub runner plus local model | Stays inside your infrastructure |
 
 Recommended practices:
 
-- Use least-privilege GitHub permissions in the workflow.
-- Store API keys in GitHub Secrets, not in workflow files.
-- Prefer organization secrets for teams.
+- Store API keys in GitHub Secrets.
+- Use least-privilege workflow permissions.
 - Review your provider's data retention policy before using it on private code.
 - Avoid `pull_request_target` unless you understand the security implications.
-
-## Costs And Limits
-
-This project does not charge you and does not enforce a daily review quota. Your actual usage depends on:
-
-| Limit source | What it affects |
-| --- | --- |
-| GitHub Actions minutes | Runtime cost for private repositories |
-| LLM provider billing | Token cost per review |
-| LLM provider rate limits | How many reviews can run at once |
-| Model context window | How much diff can be reviewed at once |
-| `max-diff-size` | How much diff this action sends |
-
-For public repositories, GitHub-hosted Actions minutes are generally free. For private repositories, reviews use your plan's Actions minutes. Most reviews should take around 1-2 minutes, but large PRs or slow self-hosted models can take longer.
-
-## Comparison
-
-| Feature | Universal Code Reviewer | Hosted AI review tools |
-| --- | --- | --- |
-| Model choice | Any OpenAI-compatible model | Usually fixed or limited |
-| Provider choice | You choose | Vendor chooses |
-| Self-hosting | Supported | Usually not supported |
-| Action-level quota | None | Often plan-based |
-| Cost model | Your GitHub minutes plus your LLM provider | Vendor subscription or usage plan |
-| Setup | GitHub workflow and secrets | Usually GitHub App install |
-| Best for | Control, privacy, model flexibility | Fastest setup and managed experience |
+- Split very large PRs for better review quality.
 
 ## Troubleshooting
 
 | Problem | Likely cause | Fix |
 | --- | --- | --- |
 | `Connection refused` | GitHub cannot reach your LLM endpoint | Use a reachable server, tunnel, or self-hosted runner |
+| `Input required and not supplied: model` | `LLM_MODEL` is missing | Add the `LLM_MODEL` secret or set `model` directly |
 | `Empty response from LLM` | Model is missing or provider returned no content | Pull/load the model and check provider logs |
 | `Invalid API key` | Wrong secret value | For local Ollama, use `ollama`; for hosted APIs, use the real key |
 | No comments appear | Missing workflow permissions | Add `pull-requests: write` and `issues: write` |
 | Slash commands do nothing | Workflow `if` condition does not include the command | Use the workflow from this README |
 | Review is too shallow | Model is too small or diff was truncated | Use a stronger model or increase `max-diff-size` |
-| Large PR review misses files | Diff exceeded `max-diff-size` | Split the PR or raise the limit |
 
 ## Development
 
@@ -355,13 +330,13 @@ npm run package
 
 ## Roadmap
 
-### v0.1.0
+### Current
 
 - GitHub Action for OpenAI-compatible LLM review.
 - Automatic PR review on open/update.
 - Slash commands: `/review`, `/summary`, `/help`.
+- Started/finished status comments so users know the action is running.
 - Line-level comments when findings can be mapped to the diff.
-- Support for hosted and self-hosted LLM endpoints.
 
 ### Planned
 

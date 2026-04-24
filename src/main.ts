@@ -27,7 +27,6 @@ async function run(): Promise<void> {
     const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
     const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
     const model = core.getInput("model", { required: true });
-    const triggerOnMention = core.getInput("trigger-on-mention") === "true";
     const failOnCritical = core.getInput("fail-on-critical") === "true";
     const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
 
@@ -54,10 +53,6 @@ async function run(): Promise<void> {
       } else if (commentBody.includes("/summary")) {
         command = "summary";
         shouldRun = true;
-      } else if (triggerOnMention && commentBody.includes("@code-reviewer")) {
-        // Legacy @mention falls back to full review
-        command = "review";
-        shouldRun = true;
       }
       
       if (shouldRun) {
@@ -74,6 +69,7 @@ async function run(): Promise<void> {
     const repo = github.context.repo.repo;
 
     core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
+    const statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model);
 
     const gitUtils = new GitUtils(octokit as any, token);
     const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
@@ -106,6 +102,7 @@ async function run(): Promise<void> {
         issue_number: prNumber,
         body: reviewText,
       });
+      await updateStatusComment(octokit, owner, repo, statusCommentId, "summary");
     } else {
       // Full review parsed and posted as a review
       core.info("Parsing review response...");
@@ -115,6 +112,7 @@ async function run(): Promise<void> {
 
       const reviewer = new GitHubReviewer(octokit as any);
       await reviewer.postReview(owner, repo, prNumber, findings);
+      await updateStatusComment(octokit, owner, repo, statusCommentId, "review");
 
       if (findings.critical.length > 0 && failOnCritical) {
         core.setFailed(`Found ${findings.critical.length} critical issue(s). Failing check.`);
@@ -125,6 +123,56 @@ async function run(): Promise<void> {
 
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function postStartedComment(
+  octokit: any,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  command: string,
+  model: string
+): Promise<number | undefined> {
+  try {
+    const action = command === "summary" ? "summary" : "code review";
+    const { data } = await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: [
+        "Universal Code Reviewer is working on this pull request.",
+        "",
+        `Mode: ${action}`,
+        `Model: ${model}`,
+      ].join("\n"),
+    });
+    return data.id;
+  } catch (error) {
+    core.warning(`Could not post started comment: ${error}`);
+    return undefined;
+  }
+}
+
+async function updateStatusComment(
+  octokit: any,
+  owner: string,
+  repo: string,
+  commentId: number | undefined,
+  command: "review" | "summary"
+): Promise<void> {
+  if (!commentId) return;
+
+  try {
+    const result = command === "summary" ? "summary" : "review";
+    await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: commentId,
+      body: `Universal Code Reviewer finished the ${result}.`,
+    });
+  } catch (error) {
+    core.warning(`Could not update status comment: ${error}`);
   }
 }
 

@@ -78,12 +78,8 @@ export function getHelpMessage(): string {
     "| /summary | Concise PR overview -- what changed, key files, notable patterns |",
     "| /help | Show this message |",
     "",
-    "You can also use:",
-    "| Trigger | Description |",
-    "|---|---|",
-    "| @code-reviewer | Alias for /review |",
-    "| Auto on PR | Every new PR gets a review automatically |",
+    "Automatic PR review can also run when the workflow is configured for pull_request events.",
     "",
-    "This action uses your own LLM endpoint -- no usage quotas, no vendor lock-in.",
+    "This action uses your own LLM endpoint -- no action-level quotas, no vendor lock-in.",
   ].join("\n");
 }

@@ -1,5 +1,5 @@
 name: "Universal Code Reviewer"
-description: "AI-powered code reviews using any OpenAI-compatible LLM. Supports PR auto-review and @mention triggers with no action-level quotas."
+description: "AI-powered code reviews using any OpenAI-compatible LLM. Supports automatic PR reviews and slash commands with no action-level quotas."
 author: "antongulin"
 branding:
   icon: "eye"
@@ -26,13 +26,8 @@ inputs:
     required: false
     default: ""
   model:
-    description: "Model name to use. Examples: kimi-k2.6:cloud, gpt-4o, codellama:13b, llama3.2"
+    description: "Model name to use. Examples: gpt-4o, llama3.2, codellama:13b, or your provider-specific model name."
     required: true
-    default: "kimi-k2.6:cloud"
-  trigger-on-mention:
-    description: "Whether to respond to @code-reviewer mentions (issue_comment events)"
-    required: false
-    default: "true"
   fail-on-critical:
     description: "If true, the action will fail when critical issues are found"
     required: false
