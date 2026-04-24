@@ -12,6 +12,24 @@ This GitHub Action brings intelligent code review to your pull requests — powe
 
 ---
 
+## How This Works (Simple Explanation)
+
+Imagine you have a smart doorbell that can review your code. Here's how it works:
+
+**The Doorbell (in each repo):**
+Every house (repo) needs its own doorbell button. We put a tiny file called `.github/workflows/code-review.yml` in each repo. This is just the button that says "when someone opens a PR, ring the bell."
+
+**The Intercom System (this repo):**
+When the doorbell rings, GitHub Actions picks up and runs the code in this repo (`universal-code-reviewer`). This is the brain that reads your code, talks to the AI, and writes the review.
+
+**The Phone Call (your LLM):**
+The intercom calls your AI model using your API key. You pay for this call (or it's free if you self-host). The AI looks at your code changes and says what should be fixed.
+
+**Why you need a doorbell in each repo:**
+GitHub requires each repo to have its own trigger file. There's no central switchboard (that's what v0.2.0 GitHub App will solve). For now, copy the same tiny YML file to each repo — it just points to this action.
+
+---
+
 ## Comparison with Gemini Code Assist
 
 | Feature | **Universal Code Reviewer** | Gemini Code Assist (Consumer) |
