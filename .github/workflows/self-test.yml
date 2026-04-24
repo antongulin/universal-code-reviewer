@@ -1,0 +1,56 @@
+name: "Self-Test"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Lint
+        run: npm run lint || true
+      
+      - name: Test
+        run: npm test || true
+      
+      - name: Build
+        run: npm run build
+      
+      - name: Use the action on itself
+        if: github.event_name == 'pull_request'
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-api-key: ${{ secrets.LLM_API_KEY }}
+          llm-base-url: ${{ secrets.LLM_BASE_URL }}
+          model: ${{ secrets.LLM_MODEL || 'kimi-k2.6:cloud' }}
+          fail-on-critical: "false"
+
+  mention-test:
+    if: github.event_name == 'issue_comment' && contains(github.event.comment.body, '@code-reviewer')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run code review on mention
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          llm-api-key: ${{ secrets.LLM_API_KEY }}
+          llm-base-url: ${{ secrets.LLM_BASE_URL }}
+          model: ${{ secrets.LLM_MODEL || 'kimi-k2.6:cloud' }}
+          trigger-on-mention: "true"

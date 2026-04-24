@@ -1,0 +1,47 @@
+name: "Universal Code Reviewer"
+description: "AI-powered code reviews using any OpenAI-compatible LLM. Supports PR auto-review and @mention triggers with no usage quotas."
+author: "antongulin"
+branding:
+  icon: "eye"
+  color: "blue"
+
+inputs:
+  github-token:
+    description: "GitHub token for posting PR review comments"
+    required: true
+    default: "${{ github.token }}"
+  llm-api-key:
+    description: "API key for your LLM endpoint. Use \"ollama\" for self-hosted Ollama."
+    required: false
+    default: "ollama"
+  api-key:
+    description: "Alias for llm-api-key"
+    required: false
+    default: ""
+  llm-base-url:
+    description: "Base URL for OpenAI-compatible API. Examples: https://api.openai.com/v1, http://localhost:11434/v1"
+    required: true
+  base-url:
+    description: "Alias for llm-base-url"
+    required: false
+    default: ""
+  model:
+    description: "Model name to use. Examples: kimi-k2.6:cloud, gpt-4o, codellama:13b, llama3.2"
+    required: true
+    default: "kimi-k2.6:cloud"
+  trigger-on-mention:
+    description: "Whether to respond to @code-reviewer mentions (issue_comment events)"
+    required: false
+    default: "true"
+  fail-on-critical:
+    description: "If true, the action will fail when critical issues are found"
+    required: false
+    default: "false"
+  max-diff-size:
+    description: "Maximum diff size in characters to send to the model. Large diffs are truncated."
+    required: false
+    default: "50000"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
