@@ -586,7 +586,7 @@ async function run() {
             : diff;
         core.info(`Diff size: ${diff.length} chars${diff.length > maxDiffSize ? " (truncated)" : ""}`);
         const reviewInstructions = command === "review"
-            ? await loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineReviewInstructions, reviewInstructionsFile)
+            ? await loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineReviewInstructions, reviewInstructionsFile, payload.pull_request?.base?.sha)
             : "";
         const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens);
         let reviewText;
@@ -643,20 +643,33 @@ async function addEyesReaction(octokit, owner, repo, commentId) {
         core.warning(`Could not add eyes reaction to trigger comment: ${error}`);
     }
 }
-async function loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineInstructions, instructionsFile) {
+async function loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineInstructions, instructionsFile, baseRef) {
     const instructions = inlineInstructions.trim() ? [inlineInstructions.trim()] : [];
     const filePath = instructionsFile.trim();
-    if (filePath) {
-        const { data: pullRequest } = await octokit.rest.pulls.get({
-            owner,
-            repo,
-            pull_number: prNumber,
-        });
-        const fileInstructions = await gitUtils.getFileContent(owner, repo, filePath, pullRequest.base.sha);
+    if (!filePath) {
+        return instructions.join("\n\n");
+    }
+    try {
+        let ref;
+        if (baseRef) {
+            ref = baseRef;
+        }
+        else {
+            const { data: pullRequest } = await octokit.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: prNumber,
+            });
+            ref = pullRequest.base.sha;
+        }
+        const fileInstructions = await gitUtils.getFileContent(owner, repo, filePath, ref);
         if (fileInstructions.trim()) {
             core.info(`Loaded reviewer instructions from ${filePath}`);
             instructions.push(`Instructions from ${filePath}:\n${fileInstructions.trim()}`);
         }
+    }
+    catch (error) {
+        core.warning(`Could not load review instructions from ${filePath}: ${error}`);
     }
     return instructions.join("\n\n");
 }
@@ -734,8 +747,8 @@ function classifyFailure(message) {
     if (lower.includes("api key") || lower.includes("401") || lower.includes("unauthorized")) {
         return "the LLM API key was rejected or is missing.";
     }
-    if (lower.includes("403") || lower.includes("forbidden")) {
-        return "the LLM provider rejected access for this key or model.";
+    if (lower.includes("403") || lower.includes("forbidden") || lower.includes("resource not accessible")) {
+        return "the workflow token is missing required permissions. If you see 'Resource not accessible by integration', add 'permissions: contents: read, pull-requests: write, issues: write' to the workflow job.";
     }
     if (lower.includes("model") && (lower.includes("not found") || lower.includes("does not exist") || lower.includes("404"))) {
         return "the configured model was not found by the provider.";

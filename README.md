@@ -261,8 +261,9 @@ Large diffs are truncated before being sent to the model. For best results, keep
 | `Input required and not supplied: llm-base-url` | Endpoint URL is missing | Add `LLM_BASE_URL` or set `llm-base-url` directly |
 | `Empty response from LLM` | Model is missing or provider returned no content | Check model name and provider logs |
 | Status comment says the review failed | LLM endpoint, API key, model, or network problem | Open the linked Actions run and check provider configuration |
-| No comments appear | Missing workflow permissions | Add `pull-requests: write` and `issues: write` |
-| Slash command ignored | Commenter lacks permission or command is not first line | Use `/review` as the first non-empty line from a maintainer account |
+| `Resource not accessible by integration` | Workflow token missing GitHub API permissions | Add `permissions: {contents: read, pull-requests: write, issues: write}` to the workflow job. See Quick Start for the exact block. |
+| `No comments appear` | Missing workflow permissions | Add `pull-requests: write` and `issues: write` |
+| `Slash command ignored` | Commenter lacks permission or command is not first line | Use `/review` as the first non-empty line from a maintainer account |
 | Review is too shallow | Model is too small or diff was truncated | Use a stronger model or increase `max-diff-size` |
 
 ## Comparison
