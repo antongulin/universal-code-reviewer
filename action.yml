@@ -29,13 +29,21 @@ inputs:
     description: "Model name to use. Examples: gpt-4o, llama3.2, codellama:13b, or your provider-specific model name."
     required: true
   fail-on-critical:
-    description: "If true, the action will fail when critical issues are found"
+    description: "Deprecated alias for fail-on-high. If true, the action will fail when high severity issues are found."
+    required: false
+    default: "false"
+  fail-on-high:
+    description: "If true, the action will fail when high severity issues are found."
     required: false
     default: "false"
   max-diff-size:
     description: "Maximum diff size in characters to send to the model. Large diffs are truncated."
     required: false
     default: "50000"
+  max-output-tokens:
+    description: "Optional maximum tokens for the LLM response. Leave empty to use the provider/model default."
+    required: false
+    default: ""
   max-comments:
     description: "Maximum number of inline review comments to post. Extra findings stay in the review body."
     required: false

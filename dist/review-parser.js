@@ -39,23 +39,25 @@ class ReviewParser {
     static parse(rawText) {
         const review = {
             summary: "",
-            critical: [],
-            important: [],
+            high: [],
+            medium: [],
+            low: [],
             suggestions: [],
             rawResponse: rawText,
         };
         try {
             const jsonReview = this.parseJsonReview(rawText);
             if (jsonReview) {
-                core.info(`Parsed JSON review: ${jsonReview.critical.length} critical, ${jsonReview.important.length} important, ${jsonReview.suggestions.length} suggestions`);
+                core.info(`Parsed JSON review: ${jsonReview.high.length} high, ${jsonReview.medium.length} medium, ${jsonReview.low.length} low, ${jsonReview.suggestions.length} suggestions`);
                 return jsonReview;
             }
             const markdownReview = this.parseMarkdownReview(rawText, review);
             review.summary = markdownReview.summary;
-            review.critical = markdownReview.critical;
-            review.important = markdownReview.important;
+            review.high = markdownReview.high;
+            review.medium = markdownReview.medium;
+            review.low = markdownReview.low;
             review.suggestions = markdownReview.suggestions;
-            core.info(`Parsed: ${review.critical.length} critical, ${review.important.length} important, ${review.suggestions.length} suggestions`);
+            core.info(`Parsed: ${review.high.length} high, ${review.medium.length} medium, ${review.low.length} low, ${review.suggestions.length} suggestions`);
         }
         catch (error) {
             core.warning(`Failed to parse structured review: ${error}. Treating entire response as raw summary.`);
@@ -71,8 +73,9 @@ class ReviewParser {
             const parsed = JSON.parse(jsonText);
             return {
                 summary: this.asString(parsed.summary),
-                critical: this.normalizeFindings(parsed.critical, "critical"),
-                important: this.normalizeFindings(parsed.important, "important"),
+                high: this.normalizeFindings(parsed.high ?? parsed.critical, "high"),
+                medium: this.normalizeFindings(parsed.medium ?? parsed.important, "medium"),
+                low: this.normalizeFindings(parsed.low, "low"),
                 suggestions: this.normalizeFindings(parsed.suggestions, "suggestion"),
                 rawResponse: rawText,
             };
@@ -128,20 +131,22 @@ class ReviewParser {
         return undefined;
     }
     static parseMarkdownReview(rawText, review) {
-        const summaryMatch = rawText.match(/#{2,3}\s*Summary[\s\S]*?(?=(?:#{2,3}\s*(?:Critical|Important|Suggestion)|$))/i);
+        const summaryMatch = rawText.match(/#{2,3}\s*Summary[\s\S]*?(?=(?:#{2,3}\s*(?:High|Medium|Low|Critical|Important|Suggestion)|$))/i);
         if (summaryMatch) {
             review.summary = summaryMatch[0].replace(/#{2,3}\s*Summary\s*/i, "").trim();
         }
-        const criticalSection = this.extractSection(rawText, "Critical");
-        const importantSection = this.extractSection(rawText, "Important");
+        const highSection = this.extractSection(rawText, "High|Critical");
+        const mediumSection = this.extractSection(rawText, "Medium|Important");
+        const lowSection = this.extractSection(rawText, "Low");
         const suggestionSection = this.extractSection(rawText, "Suggestion");
-        review.critical = this.parseFindings(criticalSection, "critical");
-        review.important = this.parseFindings(importantSection, "important");
+        review.high = this.parseFindings(highSection, "high");
+        review.medium = this.parseFindings(mediumSection, "medium");
+        review.low = this.parseFindings(lowSection, "low");
         review.suggestions = this.parseFindings(suggestionSection, "suggestion");
         return review;
     }
     static extractSection(text, sectionName) {
-        const regex = new RegExp(`#{2,3}\\s*${sectionName}[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=(?:#{2,3}\\s*(?:Critical|Important|Suggestion|Summary)|$))`, "i");
+        const regex = new RegExp(`#{2,3}\\s*(?:${sectionName})[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=(?:#{2,3}\\s*(?:High|Medium|Low|Critical|Important|Suggestion|Summary)|$))`, "i");
         const match = text.match(regex);
         return match ? match[1].trim() : "";
     }

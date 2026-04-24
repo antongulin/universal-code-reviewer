@@ -1,5 +1,5 @@
 export interface ReviewFinding {
-    severity: "critical" | "important" | "suggestion";
+    severity: "high" | "medium" | "low" | "suggestion";
     category: string;
     file?: string;
     line?: number;
@@ -9,8 +9,9 @@ export interface ReviewFinding {
 }
 export interface StructuredReview {
     summary: string;
-    critical: ReviewFinding[];
-    important: ReviewFinding[];
+    high: ReviewFinding[];
+    medium: ReviewFinding[];
+    low: ReviewFinding[];
     suggestions: ReviewFinding[];
     rawResponse: string;
 }

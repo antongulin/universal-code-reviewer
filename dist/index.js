@@ -153,7 +153,7 @@ class GitHubReviewer {
             // Build the review summary body (high-level)
             const body = this.buildReviewBody(findings, postedFindings);
             // Determine review event type
-            const event = findings.critical.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
+            const event = findings.high.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
             const { data: review } = await this.octokit.rest.pulls.createReview({
                 owner,
                 repo,
@@ -178,8 +178,9 @@ class GitHubReviewer {
         const postedFindings = new Set();
         // Combine all findings
         const allFindings = [
-            ...findings.critical,
-            ...findings.important,
+            ...findings.high,
+            ...findings.medium,
+            ...findings.low,
             ...findings.suggestions,
         ];
         for (const finding of allFindings) {
@@ -211,11 +212,13 @@ class GitHubReviewer {
         return { comments, postedFindings };
     }
     formatCommentBody(finding) {
-        const severityEmoji = finding.severity === "critical"
-            ? ":x: CRITICAL"
-            : finding.severity === "important"
-                ? ":warning: IMPORTANT"
-                : ":bulb: SUGGESTION";
+        const severityEmoji = finding.severity === "high"
+            ? ":rotating_light: HIGH"
+            : finding.severity === "medium"
+                ? ":warning: MEDIUM"
+                : finding.severity === "low"
+                    ? ":large_blue_circle: LOW"
+                    : ":bulb: SUGGESTION";
         let body = severityEmoji + "\n\n" + finding.description;
         if (finding.recommendation) {
             body += "\n\n**Recommendation:** " + finding.recommendation;
@@ -235,11 +238,14 @@ class GitHubReviewer {
         parts.push("");
         // Stats summary
         const statBlocks = [];
-        if (findings.critical.length > 0) {
-            statBlocks.push(":x: **" + findings.critical.length + " Critical**");
+        if (findings.high.length > 0) {
+            statBlocks.push(":rotating_light: **" + findings.high.length + " High**");
         }
-        if (findings.important.length > 0) {
-            statBlocks.push(":warning: **" + findings.important.length + " Important**");
+        if (findings.medium.length > 0) {
+            statBlocks.push(":warning: **" + findings.medium.length + " Medium**");
+        }
+        if (findings.low.length > 0) {
+            statBlocks.push(":large_blue_circle: **" + findings.low.length + " Low**");
         }
         if (findings.suggestions.length > 0) {
             statBlocks.push(":bulb: **" + findings.suggestions.length + " Suggestions**");
@@ -257,8 +263,9 @@ class GitHubReviewer {
         // Add findings that were not posted inline because they had no line, mapping failed,
         // or the max-comments limit was reached.
         const unpostedFindings = [
-            ...findings.critical,
-            ...findings.important,
+            ...findings.high,
+            ...findings.medium,
+            ...findings.low,
             ...findings.suggestions,
         ].filter((f) => !postedFindings.has(f));
         if (unpostedFindings.length > 0) {
@@ -278,11 +285,13 @@ class GitHubReviewer {
     formatUnpostedFinding(index, finding) {
         const line = finding.line ? ":" + finding.line : "";
         const location = finding.file ? " (`" + finding.file + line + "`)" : "";
-        let result = finding.severity === "critical"
-            ? ":x:"
-            : finding.severity === "important"
+        let result = finding.severity === "high"
+            ? ":rotating_light:"
+            : finding.severity === "medium"
                 ? ":warning:"
-                : ":bulb:";
+                : finding.severity === "low"
+                    ? ":large_blue_circle:"
+                    : ":bulb:";
         result += " **" + index + location + "** — " + finding.description;
         if (finding.recommendation) {
             result += "\n> " + finding.recommendation;
@@ -392,7 +401,8 @@ const core = __importStar(__nccwpck_require__(7484));
 class LLMClient {
     client;
     model;
-    constructor(baseUrl, apiKey, model) {
+    maxOutputTokens;
+    constructor(baseUrl, apiKey, model, maxOutputTokens) {
         core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
         this.client = new openai_1.OpenAI({
             baseURL: baseUrl,
@@ -401,18 +411,24 @@ class LLMClient {
             timeout: 120000, // 2 minutes for large diffs
         });
         this.model = model;
+        this.maxOutputTokens = maxOutputTokens && Number.isFinite(maxOutputTokens) && maxOutputTokens > 0
+            ? maxOutputTokens
+            : undefined;
     }
     async chatCompletion(systemPrompt, userContent) {
         try {
-            const response = await this.client.chat.completions.create({
+            const request = {
                 model: this.model,
                 messages: [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: userContent },
                 ],
                 temperature: 0.1,
-                max_tokens: 8192,
-            });
+            };
+            if (this.maxOutputTokens) {
+                request.max_tokens = this.maxOutputTokens;
+            }
+            const response = await this.client.chat.completions.create(request);
             const content = response.choices[0]?.message?.content || "";
             if (!content) {
                 throw new Error("Empty response from LLM");
@@ -478,15 +494,22 @@ const github_reviewer_1 = __nccwpck_require__(268);
 const review_prompts_1 = __nccwpck_require__(319);
 const commands_1 = __nccwpck_require__(367);
 async function run() {
+    let octokit;
+    let statusOwner = "";
+    let statusRepo = "";
+    let statusCommentId;
+    let statusCommand = "review";
     try {
         const eventName = github.context.eventName;
         const payload = github.context.payload;
         const token = core.getInput("github-token", { required: true });
-        const octokit = github.getOctokit(token);
+        octokit = github.getOctokit(token);
         const minCommandPermission = core.getInput("min-command-permission") || "write";
         core.info(`Event: ${eventName}`);
         const owner = github.context.repo.owner;
         const repo = github.context.repo.repo;
+        statusOwner = owner;
+        statusRepo = repo;
         let shouldRun = false;
         let prNumber;
         let command = "review"; // default command for PR events
@@ -519,6 +542,7 @@ async function run() {
                 core.warning(`Ignoring /${parsedCommand} from ${commentAuthor || "unknown user"}; minimum permission is ${minCommandPermission}.`);
                 return;
             }
+            await addEyesReaction(octokit, owner, repo, payload.comment?.id);
             command = parsedCommand;
             prNumber = payload.issue.number;
             if (command === "help") {
@@ -533,18 +557,24 @@ async function run() {
         }
         const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
         const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
-        const model = core.getInput("model", { required: true });
-        const failOnCritical = core.getInput("fail-on-critical") === "true";
+        const model = core.getInput("model") || "";
+        const failOnHigh = core.getInput("fail-on-high") === "true" || core.getInput("fail-on-critical") === "true";
         const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
         const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
+        const maxOutputTokensInput = core.getInput("max-output-tokens") || "";
+        const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput, 10) : undefined;
         const inlineReviewInstructions = core.getInput("review-instructions") || "";
         const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
+        core.info(`Model: ${model || "(not configured)"}`);
+        core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
+        statusCommand = command === "summary" ? "summary" : "review";
+        statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model || "not configured");
         if (!baseUrl) {
             throw new Error("Input required and not supplied: llm-base-url");
         }
-        core.info(`Model: ${model}`);
-        core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
-        const statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model);
+        if (!model) {
+            throw new Error("Input required and not supplied: model");
+        }
         const gitUtils = new git_utils_1.GitUtils(octokit);
         const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
         if (!diff || diff.trim().length === 0) {
@@ -558,7 +588,7 @@ async function run() {
         const reviewInstructions = command === "review"
             ? await loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineReviewInstructions, reviewInstructionsFile)
             : "";
-        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model);
+        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens);
         let reviewText;
         if (command === "summary") {
             reviewText = await runSummary(llm, truncatedDiff);
@@ -580,18 +610,37 @@ async function run() {
             // Full review parsed and posted as a review
             core.info("Parsing review response...");
             const findings = review_parser_1.ReviewParser.parse(reviewText);
-            core.info(`Found ${findings.critical.length} critical, ${findings.important.length} important, ${findings.suggestions.length} suggestions`);
+            core.info(`Found ${findings.high.length} high, ${findings.medium.length} medium, ${findings.low.length} low, ${findings.suggestions.length} suggestions`);
             const reviewer = new github_reviewer_1.GitHubReviewer(octokit, maxComments);
             await reviewer.postReview(owner, repo, prNumber, findings);
             await updateStatusComment(octokit, owner, repo, statusCommentId, "review");
-            if (findings.critical.length > 0 && failOnCritical) {
-                core.setFailed(`Found ${findings.critical.length} critical issue(s). Failing check.`);
+            if (findings.high.length > 0 && failOnHigh) {
+                core.setFailed(`Found ${findings.high.length} high severity issue(s). Failing check.`);
             }
         }
         core.info("Done.");
     }
     catch (error) {
-        core.setFailed(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
+        if (octokit && statusCommentId && statusOwner && statusRepo) {
+            await updateStatusComment(octokit, statusOwner, statusRepo, statusCommentId, "failed", message, statusCommand);
+        }
+        core.setFailed(message);
+    }
+}
+async function addEyesReaction(octokit, owner, repo, commentId) {
+    if (!commentId)
+        return;
+    try {
+        await octokit.rest.reactions.createForIssueComment({
+            owner,
+            repo,
+            comment_id: commentId,
+            content: "eyes",
+        });
+    }
+    catch (error) {
+        core.warning(`Could not add eyes reaction to trigger comment: ${error}`);
     }
 }
 async function loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineInstructions, instructionsFile) {
@@ -635,7 +684,7 @@ async function postStartedComment(octokit, owner, repo, issueNumber, command, mo
             repo,
             issue_number: issueNumber,
             body: [
-                "Universal Code Reviewer is working on this pull request.",
+                ":eyes: Universal Code Reviewer is working on this pull request.",
                 "",
                 `Mode: ${action}`,
                 `Model: ${model}`,
@@ -648,21 +697,66 @@ async function postStartedComment(octokit, owner, repo, issueNumber, command, mo
         return undefined;
     }
 }
-async function updateStatusComment(octokit, owner, repo, commentId, command) {
+async function updateStatusComment(octokit, owner, repo, commentId, status, errorMessage, attemptedCommand = "review") {
     if (!commentId)
         return;
     try {
-        const result = command === "summary" ? "summary" : "review";
+        const result = status === "summary" ? "summary" : "review";
+        const body = status === "failed"
+            ? buildFailedStatusBody(owner, repo, errorMessage, attemptedCommand)
+            : `:white_check_mark: Universal Code Reviewer finished the ${result}.`;
         await octokit.rest.issues.updateComment({
             owner,
             repo,
             comment_id: commentId,
-            body: `Universal Code Reviewer finished the ${result}.`,
+            body,
         });
     }
     catch (error) {
         core.warning(`Could not update status comment: ${error}`);
     }
+}
+function buildFailedStatusBody(owner, repo, errorMessage, attemptedCommand) {
+    const runUrl = buildRunUrl(owner, repo);
+    const reason = classifyFailure(errorMessage || "");
+    const mode = attemptedCommand === "summary" ? "summary" : "code review";
+    return [
+        ":warning: Universal Code Reviewer could not finish the " + mode + ".",
+        "",
+        `Likely reason: ${reason}`,
+        runUrl ? `Check the [GitHub Actions run](${runUrl}) for details.` : "Check the GitHub Actions run for details.",
+        "",
+        "No secrets are included in this comment.",
+    ].join("\n");
+}
+function classifyFailure(message) {
+    const lower = message.toLowerCase();
+    if (lower.includes("api key") || lower.includes("401") || lower.includes("unauthorized")) {
+        return "the LLM API key was rejected or is missing.";
+    }
+    if (lower.includes("403") || lower.includes("forbidden")) {
+        return "the LLM provider rejected access for this key or model.";
+    }
+    if (lower.includes("model") && (lower.includes("not found") || lower.includes("does not exist") || lower.includes("404"))) {
+        return "the configured model was not found by the provider.";
+    }
+    if (lower.includes("base-url") || lower.includes("invalid url") || lower.includes("unsupported protocol")) {
+        return "the LLM base URL is missing or invalid.";
+    }
+    if (lower.includes("connection") || lower.includes("fetch failed") || lower.includes("enotfound") || lower.includes("econnrefused")) {
+        return "the LLM endpoint could not be reached from GitHub Actions.";
+    }
+    if (lower.includes("timeout") || lower.includes("timed out")) {
+        return "the LLM request timed out.";
+    }
+    return "the LLM provider or action configuration returned an error.";
+}
+function buildRunUrl(owner, repo) {
+    const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
+    const runId = process.env.GITHUB_RUN_ID;
+    if (!runId)
+        return undefined;
+    return `${serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
 }
 async function postHelpComment(octokit, payload) {
     const owner = github.context.repo.owner;
@@ -750,7 +844,7 @@ function getReviewPrompt(extraInstructions = "") {
         "",
         "{",
         "  \"summary\": \"Concise overall assessment in 2-4 sentences. Mention what was done well before issues.\",",
-        "  \"critical\": [",
+        "  \"high\": [",
         "    {",
         "      \"file\": \"src/auth.ts\",",
         "      \"line\": 42,",
@@ -760,7 +854,8 @@ function getReviewPrompt(extraInstructions = "") {
         "      \"codeSnippet\": \"optional short code example\"",
         "    }",
         "  ],",
-        "  \"important\": [],",
+        "  \"medium\": [],",
+        "  \"low\": [],",
         "  \"suggestions\": []",
         "}",
         "",
@@ -775,13 +870,16 @@ function getReviewPrompt(extraInstructions = "") {
         "If there are no findings for a severity, use an empty array. Do not write markdown. Do not wrap the JSON in a code block.",
         "",
         "Severity Rules:",
-        "- Critical: Security vulnerability, production crash, data loss, missing auth, broken core function",
-        "- Important: Performance issue, missing error handling, logic flaw, significant code smell",
-        "- Suggestion: Naming, style, minor refactor, documentation gap, test coverage",
+        "- High: likely production bug, security issue, data loss, missing authorization, broken core behavior, or migration/build failure",
+        "- Medium: real bug risk, important missing error handling, performance issue, brittle edge case, or meaningful maintainability problem",
+        "- Low: minor but valid issue, small test gap, confusing naming, documentation ambiguity, or localized cleanup",
+        "- Suggestion: optional improvement that is useful but should not block merge",
         "",
         "Guidelines:",
         "- Every line-specific finding should use a line number that exists in the NEW side of the diff.",
-        "- Prefer fewer, higher-confidence findings over noisy exhaustive feedback.",
+        "- Be rigorous. Look for subtle correctness, security, data, lifecycle, and integration failures, not just style.",
+        "- Prefer high-signal findings over noisy exhaustive feedback. Do not invent issues just to fill a severity bucket.",
+        "- If a finding would not be useful to a senior maintainer, omit it.",
         "- Always acknowledge what was done well in the summary before highlighting issues.",
         "- Be thorough but concise. Every item should be actionable and specific to the diff.",
         "- Propose concrete code examples when helpful.",
@@ -821,7 +919,7 @@ function getHelpMessage() {
         "",
         "| Command | Description |",
         "|---|---|",
-        "| /review | Full code review with severity tiers (Critical / Important / Suggestion) |",
+        "| /review | Full code review with severity tiers (High / Medium / Low / Suggestion) |",
         "| /summary | Concise PR overview -- what changed, key files, notable patterns |",
         "| /help | Show this message |",
         "",
@@ -879,23 +977,25 @@ class ReviewParser {
     static parse(rawText) {
         const review = {
             summary: "",
-            critical: [],
-            important: [],
+            high: [],
+            medium: [],
+            low: [],
             suggestions: [],
             rawResponse: rawText,
         };
         try {
             const jsonReview = this.parseJsonReview(rawText);
             if (jsonReview) {
-                core.info(`Parsed JSON review: ${jsonReview.critical.length} critical, ${jsonReview.important.length} important, ${jsonReview.suggestions.length} suggestions`);
+                core.info(`Parsed JSON review: ${jsonReview.high.length} high, ${jsonReview.medium.length} medium, ${jsonReview.low.length} low, ${jsonReview.suggestions.length} suggestions`);
                 return jsonReview;
             }
             const markdownReview = this.parseMarkdownReview(rawText, review);
             review.summary = markdownReview.summary;
-            review.critical = markdownReview.critical;
-            review.important = markdownReview.important;
+            review.high = markdownReview.high;
+            review.medium = markdownReview.medium;
+            review.low = markdownReview.low;
             review.suggestions = markdownReview.suggestions;
-            core.info(`Parsed: ${review.critical.length} critical, ${review.important.length} important, ${review.suggestions.length} suggestions`);
+            core.info(`Parsed: ${review.high.length} high, ${review.medium.length} medium, ${review.low.length} low, ${review.suggestions.length} suggestions`);
         }
         catch (error) {
             core.warning(`Failed to parse structured review: ${error}. Treating entire response as raw summary.`);
@@ -911,8 +1011,9 @@ class ReviewParser {
             const parsed = JSON.parse(jsonText);
             return {
                 summary: this.asString(parsed.summary),
-                critical: this.normalizeFindings(parsed.critical, "critical"),
-                important: this.normalizeFindings(parsed.important, "important"),
+                high: this.normalizeFindings(parsed.high ?? parsed.critical, "high"),
+                medium: this.normalizeFindings(parsed.medium ?? parsed.important, "medium"),
+                low: this.normalizeFindings(parsed.low, "low"),
                 suggestions: this.normalizeFindings(parsed.suggestions, "suggestion"),
                 rawResponse: rawText,
             };
@@ -968,20 +1069,22 @@ class ReviewParser {
         return undefined;
     }
     static parseMarkdownReview(rawText, review) {
-        const summaryMatch = rawText.match(/#{2,3}\s*Summary[\s\S]*?(?=(?:#{2,3}\s*(?:Critical|Important|Suggestion)|$))/i);
+        const summaryMatch = rawText.match(/#{2,3}\s*Summary[\s\S]*?(?=(?:#{2,3}\s*(?:High|Medium|Low|Critical|Important|Suggestion)|$))/i);
         if (summaryMatch) {
             review.summary = summaryMatch[0].replace(/#{2,3}\s*Summary\s*/i, "").trim();
         }
-        const criticalSection = this.extractSection(rawText, "Critical");
-        const importantSection = this.extractSection(rawText, "Important");
+        const highSection = this.extractSection(rawText, "High|Critical");
+        const mediumSection = this.extractSection(rawText, "Medium|Important");
+        const lowSection = this.extractSection(rawText, "Low");
         const suggestionSection = this.extractSection(rawText, "Suggestion");
-        review.critical = this.parseFindings(criticalSection, "critical");
-        review.important = this.parseFindings(importantSection, "important");
+        review.high = this.parseFindings(highSection, "high");
+        review.medium = this.parseFindings(mediumSection, "medium");
+        review.low = this.parseFindings(lowSection, "low");
         review.suggestions = this.parseFindings(suggestionSection, "suggestion");
         return review;
     }
     static extractSection(text, sectionName) {
-        const regex = new RegExp(`#{2,3}\\s*${sectionName}[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=(?:#{2,3}\\s*(?:Critical|Important|Suggestion|Summary)|$))`, "i");
+        const regex = new RegExp(`#{2,3}\\s*(?:${sectionName})[^\\n]*(?::|\\s*\\(.*?\\))?\\s*\\n([\\s\\S]*?)(?=(?:#{2,3}\\s*(?:High|Medium|Low|Critical|Important|Suggestion|Summary)|$))`, "i");
         const match = text.match(regex);
         return match ? match[1].trim() : "";
     }

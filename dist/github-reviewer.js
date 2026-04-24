@@ -57,7 +57,7 @@ class GitHubReviewer {
             // Build the review summary body (high-level)
             const body = this.buildReviewBody(findings, postedFindings);
             // Determine review event type
-            const event = findings.critical.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
+            const event = findings.high.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
             const { data: review } = await this.octokit.rest.pulls.createReview({
                 owner,
                 repo,
@@ -82,8 +82,9 @@ class GitHubReviewer {
         const postedFindings = new Set();
         // Combine all findings
         const allFindings = [
-            ...findings.critical,
-            ...findings.important,
+            ...findings.high,
+            ...findings.medium,
+            ...findings.low,
             ...findings.suggestions,
         ];
         for (const finding of allFindings) {
@@ -115,11 +116,13 @@ class GitHubReviewer {
         return { comments, postedFindings };
     }
     formatCommentBody(finding) {
-        const severityEmoji = finding.severity === "critical"
-            ? ":x: CRITICAL"
-            : finding.severity === "important"
-                ? ":warning: IMPORTANT"
-                : ":bulb: SUGGESTION";
+        const severityEmoji = finding.severity === "high"
+            ? ":rotating_light: HIGH"
+            : finding.severity === "medium"
+                ? ":warning: MEDIUM"
+                : finding.severity === "low"
+                    ? ":large_blue_circle: LOW"
+                    : ":bulb: SUGGESTION";
         let body = severityEmoji + "\n\n" + finding.description;
         if (finding.recommendation) {
             body += "\n\n**Recommendation:** " + finding.recommendation;
@@ -139,11 +142,14 @@ class GitHubReviewer {
         parts.push("");
         // Stats summary
         const statBlocks = [];
-        if (findings.critical.length > 0) {
-            statBlocks.push(":x: **" + findings.critical.length + " Critical**");
+        if (findings.high.length > 0) {
+            statBlocks.push(":rotating_light: **" + findings.high.length + " High**");
         }
-        if (findings.important.length > 0) {
-            statBlocks.push(":warning: **" + findings.important.length + " Important**");
+        if (findings.medium.length > 0) {
+            statBlocks.push(":warning: **" + findings.medium.length + " Medium**");
+        }
+        if (findings.low.length > 0) {
+            statBlocks.push(":large_blue_circle: **" + findings.low.length + " Low**");
         }
         if (findings.suggestions.length > 0) {
             statBlocks.push(":bulb: **" + findings.suggestions.length + " Suggestions**");
@@ -161,8 +167,9 @@ class GitHubReviewer {
         // Add findings that were not posted inline because they had no line, mapping failed,
         // or the max-comments limit was reached.
         const unpostedFindings = [
-            ...findings.critical,
-            ...findings.important,
+            ...findings.high,
+            ...findings.medium,
+            ...findings.low,
             ...findings.suggestions,
         ].filter((f) => !postedFindings.has(f));
         if (unpostedFindings.length > 0) {
@@ -182,11 +189,13 @@ class GitHubReviewer {
     formatUnpostedFinding(index, finding) {
         const line = finding.line ? ":" + finding.line : "";
         const location = finding.file ? " (`" + finding.file + line + "`)" : "";
-        let result = finding.severity === "critical"
-            ? ":x:"
-            : finding.severity === "important"
+        let result = finding.severity === "high"
+            ? ":rotating_light:"
+            : finding.severity === "medium"
                 ? ":warning:"
-                : ":bulb:";
+                : finding.severity === "low"
+                    ? ":large_blue_circle:"
+                    : ":bulb:";
         result += " **" + index + location + "** — " + finding.description;
         if (finding.recommendation) {
             result += "\n> " + finding.recommendation;

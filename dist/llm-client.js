@@ -39,7 +39,8 @@ const core = __importStar(require("@actions/core"));
 class LLMClient {
     client;
     model;
-    constructor(baseUrl, apiKey, model) {
+    maxOutputTokens;
+    constructor(baseUrl, apiKey, model, maxOutputTokens) {
         core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
         this.client = new openai_1.OpenAI({
             baseURL: baseUrl,
@@ -48,18 +49,24 @@ class LLMClient {
             timeout: 120000, // 2 minutes for large diffs
         });
         this.model = model;
+        this.maxOutputTokens = maxOutputTokens && Number.isFinite(maxOutputTokens) && maxOutputTokens > 0
+            ? maxOutputTokens
+            : undefined;
     }
     async chatCompletion(systemPrompt, userContent) {
         try {
-            const response = await this.client.chat.completions.create({
+            const request = {
                 model: this.model,
                 messages: [
                     { role: "system", content: systemPrompt },
                     { role: "user", content: userContent },
                 ],
                 temperature: 0.1,
-                max_tokens: 8192,
-            });
+            };
+            if (this.maxOutputTokens) {
+                request.max_tokens = this.maxOutputTokens;
+            }
+            const response = await this.client.chat.completions.create(request);
             const content = response.choices[0]?.message?.content || "";
             if (!content) {
                 throw new Error("Empty response from LLM");

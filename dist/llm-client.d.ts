@@ -1,7 +1,8 @@
 export declare class LLMClient {
     private client;
     private model;
-    constructor(baseUrl: string, apiKey: string, model: string);
+    private maxOutputTokens?;
+    constructor(baseUrl: string, apiKey: string, model: string, maxOutputTokens?: number);
     chatCompletion(systemPrompt: string, userContent: string): Promise<string>;
 }
 //# sourceMappingURL=llm-client.d.ts.map

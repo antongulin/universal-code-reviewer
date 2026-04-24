@@ -29,7 +29,7 @@ The action posts a PR review summary plus inline comments when findings can be m
 ```md
 ## Code Review
 
-:warning: 1 Important | :bulb: 2 Suggestions
+:rotating_light: 1 High | :warning: 1 Medium | :bulb: 2 Suggestions
 
 ### Summary
 The change is focused and keeps the public API small. The main risk is that timeout errors are not handled, so failed provider calls can make the review job fail without a useful message.
@@ -90,11 +90,11 @@ Use the latest release tag for production. During early development you can use 
 
 ### 3. Open A PR Or Comment
 
-Automatic reviews run on PR open/update. Slash commands must be the first non-empty line of a PR comment.
+Automatic reviews run on PR open/update. Slash commands must be the first non-empty line of a PR comment. Manual trigger comments get an `eyes` reaction when the action accepts the request.
 
 | Command | Result |
 | --- | --- |
-| `/review` | Full review with Critical, Important, and Suggestion findings |
+| `/review` | Full review with High, Medium, Low, and Suggestion findings |
 | `/summary` | Short explanation of what changed |
 | `/help` | List available commands |
 
@@ -127,8 +127,10 @@ GitHub-hosted runners cannot reach `localhost` on your laptop. For self-hosted O
 | `llm-base-url` | Yes | none | OpenAI-compatible API base URL |
 | `base-url` | No | empty | Alias for `llm-base-url` |
 | `model` | Yes | none | Model name sent to the provider |
-| `fail-on-critical` | No | `false` | Fails the workflow if critical issues are found |
+| `fail-on-high` | No | `false` | Fails the workflow if high severity issues are found |
+| `fail-on-critical` | No | `false` | Deprecated alias for `fail-on-high` |
 | `max-diff-size` | No | `50000` | Maximum diff characters sent to the model |
+| `max-output-tokens` | No | empty | Optional response token cap; empty uses provider/model default |
 | `max-comments` | No | `25` | Maximum inline comments; extra findings stay in the review body |
 | `min-command-permission` | No | `write` | Minimum permission for slash commands: `read`, `triage`, `write`, `maintain`, or `admin` |
 | `review-instructions` | No | empty | Additional reviewer instructions appended to the built-in prompt |
@@ -173,11 +175,20 @@ Then a maintainer comments `/review` or `/summary` on the PR.
 
 ### Strict Mode
 
-Fail the workflow when critical issues are found:
+Fail the workflow when high severity issues are found:
 
 ```yaml
 with:
-  fail-on-critical: "true"
+  fail-on-high: "true"
+```
+
+### Let Strong Models Use Their Default Output Budget
+
+By default the action does not set `max_tokens`, so stronger models can use their provider default output budget. If you want a hard cap, set it explicitly:
+
+```yaml
+with:
+  max-output-tokens: "12000"
 ```
 
 ### Reduce Inline Noise
@@ -198,7 +209,7 @@ Add `.github/code-reviewer.md` to your repository:
 
 - Prioritize security, data loss, and production correctness over style.
 - Do not comment on generated files or formatting-only changes.
-- Treat missing tests as important when business logic changes.
+- Treat missing tests as medium or high severity when business logic changes.
 - Prefer actionable findings with a concrete fix.
 ```
 
@@ -249,6 +260,7 @@ Large diffs are truncated before being sent to the model. For best results, keep
 | `Input required and not supplied: model` | `LLM_MODEL` is missing | Add the secret or set `model` directly |
 | `Input required and not supplied: llm-base-url` | Endpoint URL is missing | Add `LLM_BASE_URL` or set `llm-base-url` directly |
 | `Empty response from LLM` | Model is missing or provider returned no content | Check model name and provider logs |
+| Status comment says the review failed | LLM endpoint, API key, model, or network problem | Open the linked Actions run and check provider configuration |
 | No comments appear | Missing workflow permissions | Add `pull-requests: write` and `issues: write` |
 | Slash command ignored | Commenter lacks permission or command is not first line | Use `/review` as the first non-empty line from a maintainer account |
 | Review is too shallow | Model is too small or diff was truncated | Use a stronger model or increase `max-diff-size` |

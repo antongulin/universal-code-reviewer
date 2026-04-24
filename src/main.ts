@@ -8,17 +8,25 @@ import { getReviewPrompt, getSummaryPrompt, getHelpMessage } from "./prompts/rev
 import { ReviewerCommand, hasRequiredPermission, parseSlashCommand } from "./commands";
 
 async function run(): Promise<void> {
+  let octokit: ReturnType<typeof github.getOctokit> | undefined;
+  let statusOwner = "";
+  let statusRepo = "";
+  let statusCommentId: number | undefined;
+  let statusCommand: "review" | "summary" = "review";
+
   try {
     const eventName = github.context.eventName;
     const payload = github.context.payload;
     const token = core.getInput("github-token", { required: true });
-    const octokit = github.getOctokit(token);
+    octokit = github.getOctokit(token);
     const minCommandPermission = core.getInput("min-command-permission") || "write";
 
     core.info(`Event: ${eventName}`);
 
     const owner = github.context.repo.owner;
     const repo = github.context.repo.repo;
+    statusOwner = owner;
+    statusRepo = repo;
 
     let shouldRun = false;
     let prNumber: number | undefined;
@@ -67,6 +75,8 @@ async function run(): Promise<void> {
         return;
       }
 
+      await addEyesReaction(octokit, owner, repo, payload.comment?.id);
+
       command = parsedCommand;
       prNumber = payload.issue.number;
 
@@ -85,21 +95,27 @@ async function run(): Promise<void> {
 
     const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
     const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
-    const model = core.getInput("model", { required: true });
-    const failOnCritical = core.getInput("fail-on-critical") === "true";
+    const model = core.getInput("model") || "";
+    const failOnHigh = core.getInput("fail-on-high") === "true" || core.getInput("fail-on-critical") === "true";
     const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
     const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
+    const maxOutputTokensInput = core.getInput("max-output-tokens") || "";
+    const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput, 10) : undefined;
     const inlineReviewInstructions = core.getInput("review-instructions") || "";
     const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
+
+    core.info(`Model: ${model || "(not configured)"}`);
+
+    core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
+    statusCommand = command === "summary" ? "summary" : "review";
+    statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model || "not configured");
 
     if (!baseUrl) {
       throw new Error("Input required and not supplied: llm-base-url");
     }
-
-    core.info(`Model: ${model}`);
-
-    core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
-    const statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model);
+    if (!model) {
+      throw new Error("Input required and not supplied: model");
+    }
 
     const gitUtils = new GitUtils(octokit as any);
     const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
@@ -126,7 +142,7 @@ async function run(): Promise<void> {
       )
       : "";
 
-    const llm = new LLMClient(baseUrl, apiKey, model);
+    const llm = new LLMClient(baseUrl, apiKey, model, maxOutputTokens);
     
     let reviewText: string;
     if (command === "summary") {
@@ -149,21 +165,45 @@ async function run(): Promise<void> {
       core.info("Parsing review response...");
       const findings = ReviewParser.parse(reviewText);
 
-      core.info(`Found ${findings.critical.length} critical, ${findings.important.length} important, ${findings.suggestions.length} suggestions`);
+      core.info(`Found ${findings.high.length} high, ${findings.medium.length} medium, ${findings.low.length} low, ${findings.suggestions.length} suggestions`);
 
       const reviewer = new GitHubReviewer(octokit as any, maxComments);
       await reviewer.postReview(owner, repo, prNumber, findings);
       await updateStatusComment(octokit, owner, repo, statusCommentId, "review");
 
-      if (findings.critical.length > 0 && failOnCritical) {
-        core.setFailed(`Found ${findings.critical.length} critical issue(s). Failing check.`);
+      if (findings.high.length > 0 && failOnHigh) {
+        core.setFailed(`Found ${findings.high.length} high severity issue(s). Failing check.`);
       }
     }
 
     core.info("Done.");
 
   } catch (error) {
-    core.setFailed(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    if (octokit && statusCommentId && statusOwner && statusRepo) {
+      await updateStatusComment(octokit, statusOwner, statusRepo, statusCommentId, "failed", message, statusCommand);
+    }
+    core.setFailed(message);
+  }
+}
+
+async function addEyesReaction(
+  octokit: any,
+  owner: string,
+  repo: string,
+  commentId: number | undefined
+): Promise<void> {
+  if (!commentId) return;
+
+  try {
+    await octokit.rest.reactions.createForIssueComment({
+      owner,
+      repo,
+      comment_id: commentId,
+      content: "eyes",
+    });
+  } catch (error) {
+    core.warning(`Could not add eyes reaction to trigger comment: ${error}`);
   }
 }
 
@@ -234,7 +274,7 @@ async function postStartedComment(
       repo,
       issue_number: issueNumber,
       body: [
-        "Universal Code Reviewer is working on this pull request.",
+        ":eyes: Universal Code Reviewer is working on this pull request.",
         "",
         `Mode: ${action}`,
         `Model: ${model}`,
@@ -252,21 +292,80 @@ async function updateStatusComment(
   owner: string,
   repo: string,
   commentId: number | undefined,
-  command: "review" | "summary"
+  status: "review" | "summary" | "failed",
+  errorMessage?: string,
+  attemptedCommand: "review" | "summary" = "review"
 ): Promise<void> {
   if (!commentId) return;
 
   try {
-    const result = command === "summary" ? "summary" : "review";
+    const result = status === "summary" ? "summary" : "review";
+    const body = status === "failed"
+      ? buildFailedStatusBody(owner, repo, errorMessage, attemptedCommand)
+      : `:white_check_mark: Universal Code Reviewer finished the ${result}.`;
+
     await octokit.rest.issues.updateComment({
       owner,
       repo,
       comment_id: commentId,
-      body: `Universal Code Reviewer finished the ${result}.`,
+      body,
     });
   } catch (error) {
     core.warning(`Could not update status comment: ${error}`);
   }
+}
+
+function buildFailedStatusBody(
+  owner: string,
+  repo: string,
+  errorMessage: string | undefined,
+  attemptedCommand: "review" | "summary"
+): string {
+  const runUrl = buildRunUrl(owner, repo);
+  const reason = classifyFailure(errorMessage || "");
+  const mode = attemptedCommand === "summary" ? "summary" : "code review";
+
+  return [
+    ":warning: Universal Code Reviewer could not finish the " + mode + ".",
+    "",
+    `Likely reason: ${reason}`,
+    runUrl ? `Check the [GitHub Actions run](${runUrl}) for details.` : "Check the GitHub Actions run for details.",
+    "",
+    "No secrets are included in this comment.",
+  ].join("\n");
+}
+
+function classifyFailure(message: string): string {
+  const lower = message.toLowerCase();
+
+  if (lower.includes("api key") || lower.includes("401") || lower.includes("unauthorized")) {
+    return "the LLM API key was rejected or is missing.";
+  }
+  if (lower.includes("403") || lower.includes("forbidden")) {
+    return "the LLM provider rejected access for this key or model.";
+  }
+  if (lower.includes("model") && (lower.includes("not found") || lower.includes("does not exist") || lower.includes("404"))) {
+    return "the configured model was not found by the provider.";
+  }
+  if (lower.includes("base-url") || lower.includes("invalid url") || lower.includes("unsupported protocol")) {
+    return "the LLM base URL is missing or invalid.";
+  }
+  if (lower.includes("connection") || lower.includes("fetch failed") || lower.includes("enotfound") || lower.includes("econnrefused")) {
+    return "the LLM endpoint could not be reached from GitHub Actions.";
+  }
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "the LLM request timed out.";
+  }
+
+  return "the LLM provider or action configuration returned an error.";
+}
+
+function buildRunUrl(owner: string, repo: string): string | undefined {
+  const serverUrl = process.env.GITHUB_SERVER_URL || "https://github.com";
+  const runId = process.env.GITHUB_RUN_ID;
+
+  if (!runId) return undefined;
+  return `${serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
 }
 
 async function postHelpComment(octokit: any, payload: any): Promise<void> {

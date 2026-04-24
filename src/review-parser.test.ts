@@ -5,7 +5,7 @@ describe("ReviewParser", () => {
     const review = ReviewParser.parse(
       JSON.stringify({
         summary: "Good structure, but one risky auth path needs work.",
-        critical: [
+        high: [
           {
             file: "src/auth.ts",
             line: 42,
@@ -15,15 +15,16 @@ describe("ReviewParser", () => {
             codeSnippet: "if (account.userId !== user.id) throw new Error('Forbidden');",
           },
         ],
-        important: [],
+        medium: [],
+        low: [],
         suggestions: [],
       })
     );
 
     expect(review.summary).toContain("Good structure");
-    expect(review.critical).toHaveLength(1);
-    expect(review.critical[0]).toMatchObject({
-      severity: "critical",
+    expect(review.high).toHaveLength(1);
+    expect(review.high[0]).toMatchObject({
+      severity: "high",
       file: "src/auth.ts",
       line: 42,
       category: "security",
@@ -34,8 +35,8 @@ describe("ReviewParser", () => {
     const review = ReviewParser.parse(`Here is the review:\n\n\`\`\`json
 {
   "summary": "Looks safe overall.",
-  "critical": [],
-  "important": [
+  "high": [],
+  "medium": [
     {
       "file": "src/main.ts",
       "line": "12",
@@ -44,36 +45,73 @@ describe("ReviewParser", () => {
       "recommendation": "Catch timeout errors and retry once."
     }
   ],
+  "low": [],
   "suggestions": []
 }
 \`\`\``);
 
-    expect(review.important).toHaveLength(1);
-    expect(review.important[0].line).toBe(12);
+    expect(review.medium).toHaveLength(1);
+    expect(review.medium[0].line).toBe(12);
+  });
+
+  it("accepts legacy critical and important JSON keys as high and medium", () => {
+    const review = ReviewParser.parse(
+      JSON.stringify({
+        summary: "Legacy shape.",
+        critical: [
+          {
+            file: "src/auth.ts",
+            line: 42,
+            category: "security",
+            description: "Missing authorization check.",
+            recommendation: "Add an authorization guard.",
+          },
+        ],
+        important: [
+          {
+            file: "src/main.ts",
+            line: 12,
+            category: "reliability",
+            description: "No timeout handling.",
+            recommendation: "Catch timeout errors.",
+          },
+        ],
+        suggestions: [],
+      })
+    );
+
+    expect(review.high).toHaveLength(1);
+    expect(review.high[0].severity).toBe("high");
+    expect(review.medium).toHaveLength(1);
+    expect(review.medium[0].severity).toBe("medium");
   });
 
   it("falls back to markdown headings and bullet findings", () => {
     const review = ReviewParser.parse(`### Summary
 The change is focused and easy to follow.
 
-### Critical Issues (must fix)
+### High Issues (must fix)
 - src/auth.ts:42 -- Missing authorization check before returning account data.
 
-### Important Issues (should fix)
+### Medium Issues (should fix)
 - None
+
+### Low Issues
+- src/index.ts:2 -- Export name is slightly unclear.
 
 ### Suggestions (nice to have)
 1. README.md:12 - Clarify the setup instructions.
 `);
 
     expect(review.summary).toContain("focused");
-    expect(review.critical).toHaveLength(1);
-    expect(review.critical[0]).toMatchObject({
+    expect(review.high).toHaveLength(1);
+    expect(review.high[0]).toMatchObject({
       file: "src/auth.ts",
       line: 42,
       description: "Missing authorization check before returning account data.",
     });
-    expect(review.important).toHaveLength(0);
+    expect(review.medium).toHaveLength(0);
+    expect(review.low).toHaveLength(1);
     expect(review.suggestions).toHaveLength(1);
     expect(review.suggestions[0].file).toBe("README.md");
   });

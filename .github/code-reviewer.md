@@ -1,6 +1,6 @@
 # Reviewer Rules
 
 - Prioritize correctness, security, and workflow safety over style.
-- Treat parser regressions, lost review findings, and unsafe GitHub event handling as important issues.
+- Treat parser regressions, lost review findings, and unsafe GitHub event handling as medium or high severity issues.
 - Keep feedback concise and actionable.
 - Do not comment on generated `dist/index.js` unless the bundle is missing or stale.
