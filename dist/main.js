@@ -296,7 +296,7 @@ function classifyFailure(message) {
         return "the LLM API key was rejected or is missing.";
     }
     if (lower.includes("403") || lower.includes("forbidden") || lower.includes("resource not accessible")) {
-        return "the workflow token is missing required permissions. If you see 'Resource not accessible by integration', add 'permissions: contents: read, pull-requests: write, issues: write' to the workflow job.";
+        return "the workflow token is missing required permissions. If you see 'Resource not accessible by integration', add 'permissions: contents: read, pull-requests: write' to the workflow job.";
     }
     if (lower.includes("model") && (lower.includes("not found") || lower.includes("does not exist") || lower.includes("404"))) {
         return "the configured model was not found by the provider.";

@@ -68,13 +68,16 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   review:
     if: |
       github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (
+        startsWith(github.event.comment.body, '/review') ||
+        startsWith(github.event.comment.body, '/summary') ||
+        startsWith(github.event.comment.body, '/help')
+      ))
     runs-on: ubuntu-latest
     steps:
       - name: Universal Code Review
@@ -156,11 +159,15 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   review:
-    if: github.event.issue.pull_request
+    if: |
+      github.event.issue.pull_request && (
+        startsWith(github.event.comment.body, '/review') ||
+        startsWith(github.event.comment.body, '/summary') ||
+        startsWith(github.event.comment.body, '/help')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: antongulin/universal-code-reviewer@v0
@@ -261,8 +268,8 @@ Large diffs are truncated before being sent to the model. For best results, keep
 | `Input required and not supplied: llm-base-url` | Endpoint URL is missing | Add `LLM_BASE_URL` or set `llm-base-url` directly |
 | `Empty response from LLM` | Model is missing or provider returned no content | Check model name and provider logs |
 | Status comment says the review failed | LLM endpoint, API key, model, or network problem | Open the linked Actions run and check provider configuration |
-| `Resource not accessible by integration` | Workflow token missing GitHub API permissions | Add `permissions: {contents: read, pull-requests: write, issues: write}` to the workflow job. See Quick Start for the exact block. |
-| `No comments appear` | Missing workflow permissions | Add `pull-requests: write` and `issues: write` |
+| `Resource not accessible by integration` | Workflow token missing GitHub API permissions | Add `permissions: {contents: read, pull-requests: write}` to the workflow job. See Quick Start for the exact block. |
+| `No comments appear` | Missing workflow permissions | Add `pull-requests: write` |
 | `Slash command ignored` | Commenter lacks permission or command is not first line | Use `/review` as the first non-empty line from a maintainer account |
 | Review is too shallow | Model is too small or diff was truncated | Use a stronger model or increase `max-diff-size` |
 
