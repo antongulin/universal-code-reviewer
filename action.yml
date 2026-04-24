@@ -36,6 +36,22 @@ inputs:
     description: "Maximum diff size in characters to send to the model. Large diffs are truncated."
     required: false
     default: "50000"
+  max-comments:
+    description: "Maximum number of inline review comments to post. Extra findings stay in the review body."
+    required: false
+    default: "25"
+  min-command-permission:
+    description: "Minimum repository permission required to run slash commands: read, triage, write, maintain, or admin."
+    required: false
+    default: "write"
+  review-instructions:
+    description: "Additional reviewer instructions appended to the built-in review prompt."
+    required: false
+    default: ""
+  review-instructions-file:
+    description: "Repository file containing additional reviewer instructions. Read from the PR base branch for safety."
+    required: false
+    default: ".github/code-reviewer.md"
 
 runs:
   using: "node20"

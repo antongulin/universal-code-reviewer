@@ -5,17 +5,7 @@ import { GitUtils } from "./git-utils";
 import { ReviewParser } from "./review-parser";
 import { GitHubReviewer } from "./github-reviewer";
 import { getReviewPrompt, getSummaryPrompt, getHelpMessage } from "./prompts/review-prompts";
-
-interface SlashCommand {
-  command: string;
-  description: string;
-}
-
-const AVAILABLE_COMMANDS: SlashCommand[] = [
-  { command: "/review", description: "Posts a full code review of the pull request" },
-  { command: "/summary", description: "Posts a summary of the changes in the pull request" },
-  { command: "/help", description: "Shows available commands" },
-];
+import { ReviewerCommand, hasRequiredPermission, parseSlashCommand } from "./commands";
 
 async function run(): Promise<void> {
   try {
@@ -23,41 +13,69 @@ async function run(): Promise<void> {
     const payload = github.context.payload;
     const token = core.getInput("github-token", { required: true });
     const octokit = github.getOctokit(token);
-
-    const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
-    const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
-    const model = core.getInput("model", { required: true });
-    const failOnCritical = core.getInput("fail-on-critical") === "true";
-    const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
+    const minCommandPermission = core.getInput("min-command-permission") || "write";
 
     core.info(`Event: ${eventName}`);
-    core.info(`Model: ${model}`);
+
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
 
     let shouldRun = false;
     let prNumber: number | undefined;
-    let command = "review"; // default command for PR events
+    let command: ReviewerCommand = "review"; // default command for PR events
 
-    if (eventName === "pull_request" || eventName === "pull_request_target") {
+    if (eventName === "pull_request_target") {
+      core.warning("pull_request_target is intentionally not supported because it can expose secrets to untrusted PR code. Use pull_request or maintainer-only issue_comment commands instead.");
+      return;
+    }
+
+    if (eventName === "pull_request") {
       shouldRun = true;
       prNumber = payload.pull_request?.number;
     } else if (eventName === "issue_comment") {
       const commentBody: string = payload.comment?.body || "";
-      
-      // Detect slash commands
-      if (commentBody.includes("/help")) {
+
+      if (!payload.issue?.pull_request) {
+        core.info("Issue comment is not on a pull request. Skipping.");
+        return;
+      }
+
+      if (payload.comment?.user?.type === "Bot") {
+        core.info("Ignoring bot comment.");
+        return;
+      }
+
+      const parsedCommand = parseSlashCommand(commentBody);
+      if (!parsedCommand) {
+        core.info("No supported slash command found. Skipping.");
+        return;
+      }
+
+      const commentAuthor = payload.comment?.user?.login;
+      const authorized = await isAuthorizedCommenter(
+        octokit,
+        owner,
+        repo,
+        commentAuthor,
+        minCommandPermission
+      );
+
+      if (!authorized) {
+        core.warning(
+          `Ignoring /${parsedCommand} from ${commentAuthor || "unknown user"}; minimum permission is ${minCommandPermission}.`
+        );
+        return;
+      }
+
+      command = parsedCommand;
+      prNumber = payload.issue.number;
+
+      if (command === "help") {
         await postHelpComment(octokit, payload);
         return;
-      } else if (commentBody.includes("/review")) {
-        command = "review";
-        shouldRun = true;
-      } else if (commentBody.includes("/summary")) {
-        command = "summary";
-        shouldRun = true;
       }
-      
-      if (shouldRun) {
-        prNumber = payload.issue?.number;
-      }
+
+      shouldRun = true;
     }
 
     if (!shouldRun || !prNumber) {
@@ -65,13 +83,25 @@ async function run(): Promise<void> {
       return;
     }
 
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
+    const apiKey = core.getInput("llm-api-key") || core.getInput("api-key") || "ollama";
+    const baseUrl = core.getInput("llm-base-url") || core.getInput("base-url") || "";
+    const model = core.getInput("model", { required: true });
+    const failOnCritical = core.getInput("fail-on-critical") === "true";
+    const maxDiffSize = parseInt(core.getInput("max-diff-size") || "50000", 10);
+    const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
+    const inlineReviewInstructions = core.getInput("review-instructions") || "";
+    const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
+
+    if (!baseUrl) {
+      throw new Error("Input required and not supplied: llm-base-url");
+    }
+
+    core.info(`Model: ${model}`);
 
     core.info(`Running /${command} on PR #${prNumber} in ${owner}/${repo}`);
     const statusCommentId = await postStartedComment(octokit, owner, repo, prNumber, command, model);
 
-    const gitUtils = new GitUtils(octokit as any, token);
+    const gitUtils = new GitUtils(octokit as any);
     const diff = await gitUtils.getPullRequestDiff(owner, repo, prNumber);
     
     if (!diff || diff.trim().length === 0) {
@@ -84,6 +114,17 @@ async function run(): Promise<void> {
       : diff;
 
     core.info(`Diff size: ${diff.length} chars${diff.length > maxDiffSize ? " (truncated)" : ""}`);
+    const reviewInstructions = command === "review"
+      ? await loadReviewInstructions(
+        octokit,
+        gitUtils,
+        owner,
+        repo,
+        prNumber,
+        inlineReviewInstructions,
+        reviewInstructionsFile
+      )
+      : "";
 
     const llm = new LLMClient(baseUrl, apiKey, model);
     
@@ -91,7 +132,7 @@ async function run(): Promise<void> {
     if (command === "summary") {
       reviewText = await runSummary(llm, truncatedDiff);
     } else {
-      reviewText = await runReview(llm, truncatedDiff);
+      reviewText = await runReview(llm, truncatedDiff, reviewInstructions);
     }
 
     if (command === "summary") {
@@ -110,7 +151,7 @@ async function run(): Promise<void> {
 
       core.info(`Found ${findings.critical.length} critical, ${findings.important.length} important, ${findings.suggestions.length} suggestions`);
 
-      const reviewer = new GitHubReviewer(octokit as any);
+      const reviewer = new GitHubReviewer(octokit as any, maxComments);
       await reviewer.postReview(owner, repo, prNumber, findings);
       await updateStatusComment(octokit, owner, repo, statusCommentId, "review");
 
@@ -123,6 +164,58 @@ async function run(): Promise<void> {
 
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function loadReviewInstructions(
+  octokit: any,
+  gitUtils: GitUtils,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  inlineInstructions: string,
+  instructionsFile: string
+): Promise<string> {
+  const instructions = inlineInstructions.trim() ? [inlineInstructions.trim()] : [];
+  const filePath = instructionsFile.trim();
+
+  if (filePath) {
+    const { data: pullRequest } = await octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: prNumber,
+    });
+
+    const fileInstructions = await gitUtils.getFileContent(owner, repo, filePath, pullRequest.base.sha);
+    if (fileInstructions.trim()) {
+      core.info(`Loaded reviewer instructions from ${filePath}`);
+      instructions.push(`Instructions from ${filePath}:\n${fileInstructions.trim()}`);
+    }
+  }
+
+  return instructions.join("\n\n");
+}
+
+async function isAuthorizedCommenter(
+  octokit: any,
+  owner: string,
+  repo: string,
+  username: string | undefined,
+  minCommandPermission: string
+): Promise<boolean> {
+  if (!username) return false;
+
+  try {
+    const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({
+      owner,
+      repo,
+      username,
+    });
+
+    return hasRequiredPermission(data.permission, minCommandPermission);
+  } catch (error) {
+    core.warning(`Could not verify permissions for ${username}: ${error}`);
+    return false;
   }
 }
 
@@ -195,8 +288,8 @@ async function postHelpComment(octokit: any, payload: any): Promise<void> {
   core.info("Posted help comment.");
 }
 
-async function runReview(llm: LLMClient, diff: string): Promise<string> {
-  const systemPrompt = getReviewPrompt();
+async function runReview(llm: LLMClient, diff: string, reviewInstructions: string): Promise<string> {
+  const systemPrompt = getReviewPrompt(reviewInstructions);
   const userContent = buildReviewInput(diff);
   core.info("Getting full code review...");
   return await llm.chatCompletion(systemPrompt, userContent);
@@ -211,12 +304,8 @@ async function runSummary(llm: LLMClient, diff: string): Promise<string> {
 
 function buildReviewInput(diff: string): string {
   return [
-    "Please review the following code diff and provide structured feedback.",
-    "Format your response with these sections:",
-    "## Critical Issues (must fix)",
-    "## Important Issues (should fix)",
-    "## Suggestions (nice to have)",
-    "## Summary",
+    "Review the following code diff and return only the strict JSON object described in the system prompt.",
+    "Use line numbers from the new side of the diff for line-specific findings.",
     "---",
     "CODE DIFF:",
     "```diff",

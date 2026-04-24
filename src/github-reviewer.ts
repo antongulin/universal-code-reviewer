@@ -4,9 +4,11 @@ import { StructuredReview, ReviewFinding } from "./review-parser";
 
 export class GitHubReviewer {
   private octokit: Octokit;
+  private maxComments: number;
 
-  constructor(octokit: Octokit) {
+  constructor(octokit: Octokit, maxComments = 25) {
     this.octokit = octokit;
+    this.maxComments = Number.isFinite(maxComments) ? Math.max(0, maxComments) : 25;
   }
 
   async postReview(
@@ -19,17 +21,18 @@ export class GitHubReviewer {
       core.info("Posting review to PR #" + pullNumber + "...");
 
       // Fetch file patches to map line positions
-      const { data: files } = await this.octokit.rest.pulls.listFiles({
+      const files = await this.octokit.paginate(this.octokit.rest.pulls.listFiles, {
         owner,
         repo,
         pull_number: pullNumber,
+        per_page: 100,
       });
 
       // Build line-level comments from findings
-      const comments = this.buildReviewComments(findings, files);
+      const { comments, postedFindings } = this.buildReviewComments(findings, files);
 
       // Build the review summary body (high-level)
-      const body = this.buildReviewBody(findings);
+      const body = this.buildReviewBody(findings, postedFindings);
       
       // Determine review event type
       const event = findings.critical.length > 0 ? "REQUEST_CHANGES" : "COMMENT";
@@ -57,8 +60,12 @@ export class GitHubReviewer {
    * Build separate line-level comments for each finding that can be mapped to a line.
    * Each comment appears as an individual thread the repo owner can reply to and resolve.
    */
-  private buildReviewComments(findings: StructuredReview, files: any[]): any[] {
+  private buildReviewComments(
+    findings: StructuredReview,
+    files: any[]
+  ): { comments: any[]; postedFindings: Set<ReviewFinding> } {
     const comments: any[] = [];
+    const postedFindings = new Set<ReviewFinding>();
 
     // Combine all findings
     const allFindings = [
@@ -68,6 +75,11 @@ export class GitHubReviewer {
     ];
 
     for (const finding of allFindings) {
+      if (comments.length >= this.maxComments) {
+        core.info(`Reached max-comments limit (${this.maxComments}); remaining findings will stay in the review body.`);
+        break;
+      }
+
       // Need both file and line to post a line comment
       if (!finding.file || !finding.line) continue;
 
@@ -85,16 +97,17 @@ export class GitHubReviewer {
         continue;
       }
 
-      let commentBody = this.formatCommentBody(finding);
+      const commentBody = this.formatCommentBody(finding);
 
       comments.push({
         path: finding.file,
         position,
         body: commentBody,
       });
+      postedFindings.add(finding);
     }
 
-    return comments;
+    return { comments, postedFindings };
   }
 
   private formatCommentBody(finding: ReviewFinding): string {
@@ -122,7 +135,7 @@ export class GitHubReviewer {
    * Build a concise summary body. Findings are shown here ONLY if they
    * could not be mapped to individual line comments.
    */
-  private buildReviewBody(findings: StructuredReview): string {
+  private buildReviewBody(findings: StructuredReview, postedFindings: Set<ReviewFinding>): string {
     const parts: string[] = [];
 
     parts.push("## :robot: Code Review");
@@ -151,20 +164,21 @@ export class GitHubReviewer {
       parts.push(findings.summary);
     }
 
-    // Add any "orphan" findings that could not be mapped to lines
-    const orphanFindings = [
+    // Add findings that were not posted inline because they had no line, mapping failed,
+    // or the max-comments limit was reached.
+    const unpostedFindings = [
       ...findings.critical,
       ...findings.important,
       ...findings.suggestions,
-    ].filter((f) => !f.file || !f.line);
+    ].filter((f) => !postedFindings.has(f));
 
-    if (orphanFindings.length > 0) {
+    if (unpostedFindings.length > 0) {
       parts.push("");
       parts.push("---");
-      parts.push("### :page_facing_up: General Findings (not linked to specific lines)");
-      for (let i = 0; i < orphanFindings.length; i++) {
-        parts.push("") ;
-        parts.push(this.formatOrphanFinding(i + 1, orphanFindings[i]));
+      parts.push("### :page_facing_up: Findings Not Posted Inline");
+      for (let i = 0; i < unpostedFindings.length; i++) {
+        parts.push("");
+        parts.push(this.formatUnpostedFinding(i + 1, unpostedFindings[i]));
       }
     }
 
@@ -177,8 +191,9 @@ export class GitHubReviewer {
     return parts.join("\n");
   }
 
-  private formatOrphanFinding(index: number, finding: ReviewFinding): string {
-    const location = finding.file ? " (`" + finding.file + "`)" : "";
+  private formatUnpostedFinding(index: number, finding: ReviewFinding): string {
+    const line = finding.line ? ":" + finding.line : "";
+    const location = finding.file ? " (`" + finding.file + line + "`)" : "";
     let result =
       finding.severity === "critical"
         ? ":x:"

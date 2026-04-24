@@ -14,6 +14,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      HAS_LLM: ${{ secrets.LLM_API_KEY != '' && secrets.LLM_BASE_URL != '' && secrets.LLM_MODEL != '' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -27,16 +29,19 @@ jobs:
         run: npm ci
       
       - name: Lint
-        run: npm run lint || true
-      
+        run: npm run lint
+       
       - name: Test
-        run: npm test || true
-      
+        run: npm test
+       
       - name: Build
         run: npm run build
+
+      - name: Verify committed bundle
+        run: git diff --exit-code dist/index.js
       
       - name: Use the action on itself
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && env.HAS_LLM == 'true'
         uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -53,10 +58,13 @@ jobs:
         contains(github.event.comment.body, '/help')
       )
     runs-on: ubuntu-latest
+    env:
+      HAS_LLM: ${{ secrets.LLM_API_KEY != '' && secrets.LLM_BASE_URL != '' && secrets.LLM_MODEL != '' }}
     steps:
       - uses: actions/checkout@v4
        
       - name: Run code review command
+        if: env.HAS_LLM == 'true'
         uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

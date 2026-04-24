@@ -1,0 +1,1 @@
+{"version":3,"file":"llm-client.d.ts","sourceRoot":"","sources":["../src/llm-client.ts"],"names":[],"mappings":"AAGA,qBAAa,SAAS;IACpB,OAAO,CAAC,MAAM,CAAS;IACvB,OAAO,CAAC,KAAK,CAAS;gBAEV,OAAO,EAAE,MAAM,EAAE,MAAM,EAAE,MAAM,EAAE,KAAK,EAAE,MAAM;IAapD,cAAc,CAAC,YAAY,EAAE,MAAM,EAAE,WAAW,EAAE,MAAM,GAAG,OAAO,CAAC,MAAM,CAAC;CAwBjF"}
