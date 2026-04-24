@@ -44,6 +44,10 @@ inputs:
     description: "Optional maximum tokens for the LLM response. Leave empty to use the provider/model default."
     required: false
     default: ""
+  llm-timeout-ms:
+    description: "Timeout in milliseconds for LLM requests. Default is 10 minutes (600000 ms). Increase if you frequently see 'Request timed out' with large diffs."
+    required: false
+    default: "600000"
   max-comments:
     description: "Maximum number of inline review comments to post. Extra findings stay in the review body."
     required: false

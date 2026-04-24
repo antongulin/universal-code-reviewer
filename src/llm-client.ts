@@ -1,4 +1,5 @@
 import { OpenAI } from "openai";
+import { DEFAULT_LLM_TIMEOUT_MS } from "./config";
 import * as core from "@actions/core";
 
 export class LLMClient {
@@ -6,14 +7,14 @@ export class LLMClient {
   private model: string;
   private maxOutputTokens?: number;
 
-  constructor(baseUrl: string, apiKey: string, model: string, maxOutputTokens?: number) {
-    core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
+  constructor(baseUrl: string, apiKey: string, model: string, maxOutputTokens?: number, timeoutMs = DEFAULT_LLM_TIMEOUT_MS) {
+    core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}, timeout=${timeoutMs} ms`);
     
     this.client = new OpenAI({
       baseURL: baseUrl,
       apiKey: apiKey || "ollama",
       maxRetries: 3,
-      timeout: 120000, // 2 minutes for large diffs
+      timeout: timeoutMs,
     });
 
     this.model = model;

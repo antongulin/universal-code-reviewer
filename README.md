@@ -134,6 +134,7 @@ GitHub-hosted runners cannot reach `localhost` on your laptop. For self-hosted O
 | `fail-on-critical` | No | `false` | Deprecated alias for `fail-on-high` |
 | `max-diff-size` | No | `50000` | Maximum diff characters sent to the model |
 | `max-output-tokens` | No | empty | Optional response token cap; empty uses provider/model default |
+| `llm-timeout-ms` | No | `600000` | LLM request timeout in milliseconds. Default is 10 minutes. Increase if large diffs time out. |
 | `max-comments` | No | `25` | Maximum inline comments; extra findings stay in the review body |
 | `min-command-permission` | No | `write` | Minimum permission for slash commands: `read`, `triage`, `write`, `maintain`, or `admin` |
 | `review-instructions` | No | empty | Additional reviewer instructions appended to the built-in prompt |
@@ -268,6 +269,7 @@ Large diffs are truncated before being sent to the model. For best results, keep
 | `Input required and not supplied: llm-base-url` | Endpoint URL is missing | Add `LLM_BASE_URL` or set `llm-base-url` directly |
 | `Empty response from LLM` | Model is missing or provider returned no content | Check model name and provider logs |
 | Status comment says the review failed | LLM endpoint, API key, model, or network problem | Open the linked Actions run and check provider configuration |
+| `Request timed out` | LLM provider took too long to respond, usually on large diffs | Increase `llm-timeout-ms` (default 10 min = `600000`) or reduce `max-diff-size` |
 | `Resource not accessible by integration` | Workflow token missing GitHub API permissions | Add `permissions: {contents: read, pull-requests: write}` to the workflow job. See Quick Start for the exact block. |
 | `No comments appear` | Missing workflow permissions | Add `pull-requests: write` |
 | `Slash command ignored` | Commenter lacks permission or command is not first line | Use `/review` as the first non-empty line from a maintainer account |

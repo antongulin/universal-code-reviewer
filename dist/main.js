@@ -39,6 +39,7 @@ const llm_client_1 = require("./llm-client");
 const git_utils_1 = require("./git-utils");
 const review_parser_1 = require("./review-parser");
 const github_reviewer_1 = require("./github-reviewer");
+const config_1 = require("./config");
 const review_prompts_1 = require("./prompts/review-prompts");
 const commands_1 = require("./commands");
 async function run() {
@@ -111,6 +112,11 @@ async function run() {
         const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
         const maxOutputTokensInput = core.getInput("max-output-tokens") || "";
         const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput, 10) : undefined;
+        const llmTimeoutMsInput = core.getInput("llm-timeout-ms") || "";
+        const { value: llmTimeoutMs, valid: llmTimeoutValid } = (0, config_1.parseLLMTimeout)(llmTimeoutMsInput);
+        if (!llmTimeoutValid) {
+            core.warning(`Invalid llm-timeout-ms value "${llmTimeoutMsInput}", using default ${config_1.DEFAULT_LLM_TIMEOUT_MS}`);
+        }
         const inlineReviewInstructions = core.getInput("review-instructions") || "";
         const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
         core.info(`Model: ${model || "(not configured)"}`);
@@ -136,7 +142,7 @@ async function run() {
         const reviewInstructions = command === "review"
             ? await loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineReviewInstructions, reviewInstructionsFile, payload.pull_request?.base?.sha)
             : "";
-        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens);
+        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens, llmTimeoutMs);
         let reviewText;
         if (command === "summary") {
             reviewText = await runSummary(llm, truncatedDiff);
