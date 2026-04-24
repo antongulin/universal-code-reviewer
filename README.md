@@ -292,6 +292,30 @@ For private repositories, GitHub Actions has monthly minute quotas:
 
 ---
 
+## Version
+
+### v0.1.0 (current)
+
+- GitHub Action supporting any OpenAI-compatible LLM
+- Slash commands: `/review`, `/summary`, `/help`
+- Individual line-level comments for each finding
+- Support for Ollama, OpenAI, Together, Groq, and self-hosted endpoints
+
+## Roadmap
+
+### v0.2.0 — GitHub App (planned)
+
+Installing on every repo with a workflow file is repetitive. v0.2.0 will introduce a **GitHub App** version:
+
+- **One-click install** across all repos in your account or organization
+- **Zero workflow files** — no `.github/workflows/` needed in each repo
+- **Automatic PR reviews** on every repo without per-repo configuration
+- **@mention support** in any PR comment across all installed repos
+
+**Status:** Planned. Want to help or track progress? Open an issue or PR.
+
+---
+
 ## Contributing
 
 PRs and issues are welcome! Improvements to prompts, new slash commands, or support for additional LLM providers are especially appreciated.
