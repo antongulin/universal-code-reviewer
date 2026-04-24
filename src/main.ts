@@ -4,6 +4,7 @@ import { LLMClient } from "./llm-client";
 import { GitUtils } from "./git-utils";
 import { ReviewParser } from "./review-parser";
 import { GitHubReviewer } from "./github-reviewer";
+import { DEFAULT_LLM_TIMEOUT_MS, parseLLMTimeout } from "./config";
 import { getReviewPrompt, getSummaryPrompt, getHelpMessage } from "./prompts/review-prompts";
 import { ReviewerCommand, hasRequiredPermission, parseSlashCommand } from "./commands";
 
@@ -101,6 +102,11 @@ async function run(): Promise<void> {
     const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
     const maxOutputTokensInput = core.getInput("max-output-tokens") || "";
     const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput, 10) : undefined;
+    const llmTimeoutMsInput = core.getInput("llm-timeout-ms") || "";
+    const { value: llmTimeoutMs, valid: llmTimeoutValid } = parseLLMTimeout(llmTimeoutMsInput);
+    if (!llmTimeoutValid) {
+      core.warning(`Invalid llm-timeout-ms value "${llmTimeoutMsInput}", using default ${DEFAULT_LLM_TIMEOUT_MS}`);
+    }
     const inlineReviewInstructions = core.getInput("review-instructions") || "";
     const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
 
@@ -143,7 +149,7 @@ async function run(): Promise<void> {
       )
       : "";
 
-    const llm = new LLMClient(baseUrl, apiKey, model, maxOutputTokens);
+    const llm = new LLMClient(baseUrl, apiKey, model, maxOutputTokens, llmTimeoutMs);
     
     let reviewText: string;
     if (command === "summary") {

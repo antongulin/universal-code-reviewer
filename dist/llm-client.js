@@ -35,18 +35,19 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LLMClient = void 0;
 const openai_1 = require("openai");
+const config_1 = require("./config");
 const core = __importStar(require("@actions/core"));
 class LLMClient {
     client;
     model;
     maxOutputTokens;
-    constructor(baseUrl, apiKey, model, maxOutputTokens) {
-        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
+    constructor(baseUrl, apiKey, model, maxOutputTokens, timeoutMs = config_1.DEFAULT_LLM_TIMEOUT_MS) {
+        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}, timeout=${timeoutMs} ms`);
         this.client = new openai_1.OpenAI({
             baseURL: baseUrl,
             apiKey: apiKey || "ollama",
             maxRetries: 3,
-            timeout: 120000, // 2 minutes for large diffs
+            timeout: timeoutMs,
         });
         this.model = model;
         this.maxOutputTokens = maxOutputTokens && Number.isFinite(maxOutputTokens) && maxOutputTokens > 0

@@ -44,6 +44,28 @@ function hasRequiredPermission(permission, minimumPermission) {
 
 /***/ }),
 
+/***/ 4008:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_LLM_TIMEOUT_MS = void 0;
+exports.parseLLMTimeout = parseLLMTimeout;
+exports.DEFAULT_LLM_TIMEOUT_MS = 600000; // 10 minutes
+function parseLLMTimeout(input) {
+    if (!input)
+        return { value: exports.DEFAULT_LLM_TIMEOUT_MS, valid: true };
+    const parsed = Number(input);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return { value: parsed, valid: true };
+    }
+    return { value: exports.DEFAULT_LLM_TIMEOUT_MS, valid: false };
+}
+//# sourceMappingURL=config.js.map
+
+/***/ }),
+
 /***/ 8529:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -397,18 +419,19 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.LLMClient = void 0;
 const openai_1 = __nccwpck_require__(2583);
+const config_1 = __nccwpck_require__(4008);
 const core = __importStar(__nccwpck_require__(7484));
 class LLMClient {
     client;
     model;
     maxOutputTokens;
-    constructor(baseUrl, apiKey, model, maxOutputTokens) {
-        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}`);
+    constructor(baseUrl, apiKey, model, maxOutputTokens, timeoutMs = config_1.DEFAULT_LLM_TIMEOUT_MS) {
+        core.info(`Initializing LLM client: baseUrl=${baseUrl}, model=${model}, timeout=${timeoutMs} ms`);
         this.client = new openai_1.OpenAI({
             baseURL: baseUrl,
             apiKey: apiKey || "ollama",
             maxRetries: 3,
-            timeout: 120000, // 2 minutes for large diffs
+            timeout: timeoutMs,
         });
         this.model = model;
         this.maxOutputTokens = maxOutputTokens && Number.isFinite(maxOutputTokens) && maxOutputTokens > 0
@@ -491,6 +514,7 @@ const llm_client_1 = __nccwpck_require__(3316);
 const git_utils_1 = __nccwpck_require__(8529);
 const review_parser_1 = __nccwpck_require__(2141);
 const github_reviewer_1 = __nccwpck_require__(268);
+const config_1 = __nccwpck_require__(4008);
 const review_prompts_1 = __nccwpck_require__(319);
 const commands_1 = __nccwpck_require__(367);
 async function run() {
@@ -563,6 +587,11 @@ async function run() {
         const maxComments = parseInt(core.getInput("max-comments") || "25", 10);
         const maxOutputTokensInput = core.getInput("max-output-tokens") || "";
         const maxOutputTokens = maxOutputTokensInput ? parseInt(maxOutputTokensInput, 10) : undefined;
+        const llmTimeoutMsInput = core.getInput("llm-timeout-ms") || "";
+        const { value: llmTimeoutMs, valid: llmTimeoutValid } = (0, config_1.parseLLMTimeout)(llmTimeoutMsInput);
+        if (!llmTimeoutValid) {
+            core.warning(`Invalid llm-timeout-ms value "${llmTimeoutMsInput}", using default ${config_1.DEFAULT_LLM_TIMEOUT_MS}`);
+        }
         const inlineReviewInstructions = core.getInput("review-instructions") || "";
         const reviewInstructionsFile = core.getInput("review-instructions-file") || "";
         core.info(`Model: ${model || "(not configured)"}`);
@@ -588,7 +617,7 @@ async function run() {
         const reviewInstructions = command === "review"
             ? await loadReviewInstructions(octokit, gitUtils, owner, repo, prNumber, inlineReviewInstructions, reviewInstructionsFile, payload.pull_request?.base?.sha)
             : "";
-        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens);
+        const llm = new llm_client_1.LLMClient(baseUrl, apiKey, model, maxOutputTokens, llmTimeoutMs);
         let reviewText;
         if (command === "summary") {
             reviewText = await runSummary(llm, truncatedDiff);
